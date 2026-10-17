@@ -1,0 +1,19 @@
+{
+  "name": "双通道会话隔离",
+  "category": "多轮上下文",
+  "description": "Telegram 与 Console 两个通道应各自独立记忆历史，互相不串话",
+  "steps": [
+    {"channel": "telegram", "chat_id": "tg1", "sender_id": "u1", "content": "我喜欢跑步，每周三都会去"},
+    {"channel": "console", "chat_id": "c1", "sender_id": "u2", "content": "我最近在学 Python 和 SQL"},
+    {"channel": "telegram", "chat_id": "tg1", "sender_id": "u1", "content": "我刚才说了什么？"}
+  ],
+  "script": [
+    [{"type": "text", "content": "好的，跑步是个好习惯"}],
+    [{"type": "text", "content": "好的，学习编程很有意义"}],
+    [{"type": "text", "content": "你提到过喜欢跑步，每周三会去"}]
+  ],
+  "assertions": [
+    {"type": "llm_prompt_not_contains", "step": 2, "substrings": ["Python", "SQL"], "desc": "Telegram 第3轮历史不应包含 Console 的 Python/SQL 内容"},
+    {"type": "llm_prompt_contains", "step": 2, "substrings": ["跑步"], "desc": "Telegram 第3轮历史应包含自己会话的跑步内容"}
+  ]
+}

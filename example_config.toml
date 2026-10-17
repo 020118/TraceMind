@@ -1,0 +1,95 @@
+        
+[llm]
+provider = "deepseek"
+
+[llm.main]
+# 主模型，必填。推荐 deepseek-v4-flash（agent 能力强、价格低）。
+model = "deepseek-v4-flash"
+api_key = "${AGENT_MAIN_API_KEY}"
+base_url = "https://api.deepseek.com/v1"
+enable_thinking = true
+multimodal = false
+
+[llm.fast]
+# 轻量模型，用于 memory gate / query rewrite / HyDE。
+# 不填则退回主模型，但延迟会稍高。
+model = "qwen-flash"
+api_key = "${AGENT_FAST_API_KEY}"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+[llm.vl]
+# 视觉模型，仅在 llm.main.multimodal = false 时需要。
+# model 留空则不启用，图片会作为路径传给主模型。
+model = "qwen-vl-plus"
+api_key = "${AGENT_VL_API_KEY}"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+[memory]
+enabled = true
+engine = ""                     # 记忆引擎，留空 = default_memory 插件
+
+[memory.embedding]
+model = "text-embedding-v3"     # 向量模型
+api_key = "${AGENT_EMBEDDING_API_KEY}"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+[memory.retrieval]
+top_k = 6                       # 每轮最多注入的记忆片段数
+score_threshold = 0.35          # 混合检索最低相关度
+semantic_weight = 0.7           # 向量语义相关度权重
+keyword_weight = 0.3            # 关键词相关度权重
+
+[rag]
+# 文档知识库与个人记忆分开存储。默认复用 [memory.embedding] 的向量模型配置。
+enabled = true
+chunk_size = 1200               # 每个分块的最大字符数
+chunk_overlap = 150             # 相邻分块重叠字符数，避免语义在边界断开
+top_k = 6                       # 每次知识库检索返回的片段数
+rrf_k = 60                      # RRF 融合常数，一般无需调整
+
+[rag.vector_store]
+provider = "qdrant"
+url = "${QDRANT_URL}"
+api_key = "${QDRANT_API_KEY}"  # 本地Docker可留空；生产环境建议设置
+collection = "agent_knowledge_v1"
+timeout_seconds = 10
+read_from_qdrant = true         # Qdrant成功时作为主Dense检索器
+shadow_evaluation = true        # 同时运行SQLite精确基准，记录Recall@K和延迟
+sync_on_start = true            # 启动时补偿同步PENDING/FAILED文档
+
+[channels.telegram]
+token = "${TELEGRAM_BOT_TOKEN}"
+allow_from = ["xdwy02"]
+
+[proactive]
+# 主动推送模块（proactive_v2）。enabled = true 时启动 ProactiveLoop。
+# 测试用配置：dev_verify 预设（60s/30s tick）+ 强制 context-fallback（context_prob=1.0）。
+# 测完恢复：enabled=false / profile="daily" / 删掉 context_prob 与 delivery_cooldown_hours。
+enabled = false
+
+[agent]
+# 单次工具执行硬超时，防止网络或第三方工具卡住整个会话。
+tool_timeout_seconds = 30
+profile = "daily"          # 预设：daily / dev_verify / quiet
+
+[proactive.target]
+channel = "telegram"            # 推送目标渠道：console / telegram
+chat_id = "8837077427"          # 你的 Telegram 数字 chat_id（sessions.db 里 telegram:8837077427 即此会话）
+
+[proactive.agent]
+max_steps = 12                  # judge 阶段 LLM 工具循环步数上限
+content_limit = 5               # 每次拉取的内容条数上限
+web_fetch_max_chars = 6000      # web_fetch 正文截断长度
+context_prob = 1.0              # 测试：每轮都开启 context-fallback（无 feed 源时唯一的推送路径）
+delivery_cooldown_hours = 0     # 测试：取消推送后的冷却，方便连续观察
+
+[proactive.drift]
+enabled = false                 # 空闲 drift 任务（让 agent 自主执行技能）
+max_steps = 10
+min_interval_hours = 6
+
+# [proactive.overrides.trigger]
+# tick_interval_s0 = 480
+# tick_interval_s1 = 240
+
+

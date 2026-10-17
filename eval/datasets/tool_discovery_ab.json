@@ -1,0 +1,99 @@
+{
+  "name": "tool_search 与延迟加载 A/B 评测",
+  "description": "比较全量工具 Schema 与 tool_search 延迟加载在工具发现、选择、任务完成和上下文开销上的差异。",
+  "cases": [
+    {
+      "id": "read_python_file",
+      "category": "文件读取",
+      "prompt": "请读取 src/calculator.py，告诉我 add 函数当前是怎么实现的。不要修改文件。",
+      "search_query": "读取 Python 文件代码",
+      "plan": [
+        {"name": "read_file", "arguments": {"path": "src/calculator.py"}}
+      ],
+      "expected_tools": ["read_file"],
+      "forbidden_tools": ["edit_file", "write_file", "run_tests"]
+    },
+    {
+      "id": "list_project_files",
+      "category": "目录查看",
+      "prompt": "查看项目根目录，列出里面的 Python 文件和目录。",
+      "search_query": "查看项目目录文件列表",
+      "plan": [
+        {"name": "list_dir", "arguments": {"path": "."}}
+      ],
+      "expected_tools": ["list_dir"],
+      "forbidden_tools": ["edit_file", "write_file"]
+    },
+    {
+      "id": "syntax_only",
+      "category": "代码检查",
+      "prompt": "只检查 src/app.py 有没有 Python 语法错误，不要执行测试，也不要修改代码。",
+      "search_query": "Python 语法检查 不执行代码",
+      "plan": [
+        {"name": "check_python_syntax", "arguments": {"path": "src/app.py"}}
+      ],
+      "expected_tools": ["check_python_syntax"],
+      "forbidden_tools": ["run_tests", "edit_file", "write_file"]
+    },
+    {
+      "id": "web_research",
+      "category": "网络搜索",
+      "prompt": "搜索 Python 3.13 free-threaded mode 的资料，并概括搜索结果。",
+      "search_query": "网络搜索 Python 资料",
+      "plan": [
+        {"name": "web_search", "arguments": {"query": "Python 3.13 free-threaded mode"}}
+      ],
+      "expected_tools": ["web_search"],
+      "forbidden_tools": ["edit_file", "write_file"]
+    },
+    {
+      "id": "fetch_web_page",
+      "category": "网页读取",
+      "prompt": "读取 https://example.com/python-agent 这篇网页的正文并总结。",
+      "search_query": "读取网页 URL 正文",
+      "plan": [
+        {"name": "web_fetch", "arguments": {"url": "https://example.com/python-agent"}}
+      ],
+      "expected_tools": ["web_fetch"],
+      "forbidden_tools": ["edit_file", "write_file"]
+    },
+    {
+      "id": "weather_lookup",
+      "category": "天气查询",
+      "prompt": "查询北京现在的天气。",
+      "search_query": "天气查询 天气预报",
+      "plan": [
+        {"name": "get_weather", "arguments": {"city": "北京"}}
+      ],
+      "expected_tools": ["get_weather"],
+      "forbidden_tools": ["edit_file", "write_file"]
+    },
+    {
+      "id": "fix_and_verify_code",
+      "category": "代码修改闭环",
+      "prompt": "src/calculator.py 的 add 函数把加法写成了减法。请读取并修复它，先检查 Python 语法，再运行 tests/test_calculator.py 验证。",
+      "search_query": "读取 修改 Python 代码 语法检查 pytest 测试",
+      "plan": [
+        {"name": "read_file", "arguments": {"path": "src/calculator.py"}},
+        {
+          "name": "edit_file",
+          "arguments": {
+            "path": "src/calculator.py",
+            "old_text": "return left - right",
+            "new_text": "return left + right"
+          }
+        },
+        {"name": "check_python_syntax", "arguments": {"path": "src/calculator.py"}},
+        {"name": "run_tests", "arguments": {"path": "tests/test_calculator.py"}}
+      ],
+      "expected_tools": ["read_file", "edit_file", "check_python_syntax", "run_tests"],
+      "required_order": ["read_file", "edit_file", "check_python_syntax", "run_tests"],
+      "forbidden_tools": ["write_file"],
+      "state_assertions": {
+        "file": "src/calculator.py",
+        "contains": "return left + right",
+        "tests_passed": true
+      }
+    }
+  ]
+}

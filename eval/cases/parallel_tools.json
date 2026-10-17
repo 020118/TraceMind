@@ -1,0 +1,27 @@
+{
+  "name": "多工具并行执行",
+  "category": "工具调用",
+  "description": "LLM 一次返回多个独立工具调用时，应并行执行而非串行（慢工具并发探针验证）",
+  "steps": [
+    {"channel": "console", "chat_id": "c1", "sender_id": "u1", "content": "同时查询三个城市"}
+  ],
+  "script": [
+    [
+      {
+        "type": "tool_calls",
+        "tools": [
+          {"name": "slow_probe", "arguments": {"tag": "A"}, "id": "call_1"},
+          {"name": "slow_probe", "arguments": {"tag": "B"}, "id": "call_2"},
+          {"name": "slow_probe", "arguments": {"tag": "C"}, "id": "call_3"}
+        ]
+      },
+      {"type": "text", "content": "三个城市都查完了"}
+    ]
+  ],
+  "assertions": [
+    {"type": "tool_called", "name": "slow_probe", "args": {"tag": "A"}, "desc": "工具 A 被调用"},
+    {"type": "tool_called", "name": "slow_probe", "args": {"tag": "B"}, "desc": "工具 B 被调用"},
+    {"type": "tool_called", "name": "slow_probe", "args": {"tag": "C"}, "desc": "工具 C 被调用"},
+    {"type": "max_concurrency", "target": 3, "desc": "3 个独立工具应并行执行（最大并发 >= 3）"}
+  ]
+}

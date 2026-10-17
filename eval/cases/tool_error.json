@@ -1,0 +1,19 @@
+{
+  "name": "工具异常处理",
+  "category": "鲁棒性",
+  "description": "工具抛出异常时 agent 不应崩溃，应把错误信息回填给 LLM 继续迭代",
+  "steps": [
+    {"channel": "console", "chat_id": "c1", "sender_id": "u1", "content": "帮我执行一个一定会失败的操作"}
+  ],
+  "script": [
+    [
+      {"type": "tool_calls", "tools": [{"name": "fail_tool", "arguments": {}, "id": "call_1"}]},
+      {"type": "text", "content": "执行失败了，但没关系，我告诉你结果"}
+    ]
+  ],
+  "assertions": [
+    {"type": "tool_called", "name": "fail_tool", "desc": "fail_tool 被调用"},
+    {"type": "llm_prompt_contains", "step": 0, "substrings": ["执行出错", "fail_tool"], "desc": "工具错误信息应回填给 LLM（prompt 含错误详情）"},
+    {"type": "llm_calls", "step": 0, "max": 3, "desc": "异常后应继续迭代而不是死循环"}
+  ]
+}

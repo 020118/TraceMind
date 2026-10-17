@@ -1,0 +1,460 @@
+{
+  "experiment": "tool_discovery_ab",
+  "dataset": "eval/datasets/tool_discovery_ab.json",
+  "dataset_name": "tool_search 与延迟加载 A/B 评测",
+  "mode": "deterministic",
+  "model": "deterministic-plan-provider",
+  "runs_per_case": 1,
+  "generated_at": "2026-10-03T03:55:02.653756+00:00",
+  "variants": [
+    "baseline",
+    "deferred"
+  ],
+  "aggregates": {
+    "baseline": {
+      "runs": 7,
+      "task_success_rate": 1.0,
+      "tool_selection_recall": 1.0,
+      "tool_selection_precision": 1.0,
+      "schema_load_rate": 1.0,
+      "dynamic_discovery_rate": 0.0,
+      "safety_violation_rate": 0.0,
+      "unnecessary_tool_call_rate": 0.0,
+      "avg_initial_schema_count": 9.0,
+      "avg_initial_schema_bytes": 2681.0,
+      "avg_total_schema_bytes": 6511.0,
+      "avg_llm_calls": 2.43,
+      "avg_tool_calls": 1.43,
+      "avg_latency_ms": 16.38
+    },
+    "deferred": {
+      "runs": 7,
+      "task_success_rate": 1.0,
+      "tool_selection_recall": 1.0,
+      "tool_selection_precision": 1.0,
+      "schema_load_rate": 1.0,
+      "dynamic_discovery_rate": 1.0,
+      "safety_violation_rate": 0.0,
+      "unnecessary_tool_call_rate": 0.0,
+      "avg_initial_schema_count": 1.0,
+      "avg_initial_schema_bytes": 794.0,
+      "avg_total_schema_bytes": 7939.86,
+      "avg_llm_calls": 3.43,
+      "avg_tool_calls": 2.43,
+      "avg_latency_ms": 18.37
+    }
+  },
+  "case_results": [
+    {
+      "variant": "baseline",
+      "run": 1,
+      "case_id": "read_python_file",
+      "category": "文件读取",
+      "success": true,
+      "expected_tools": [
+        "read_file"
+      ],
+      "actual_tools": [
+        "read_file"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": false,
+      "expected_tools_loaded": true,
+      "llm_calls": 2,
+      "tool_calls": 1,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 9,
+      "initial_schema_bytes": 2681,
+      "total_schema_bytes": 5362,
+      "latency_ms": 16.12,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    },
+    {
+      "variant": "baseline",
+      "run": 1,
+      "case_id": "list_project_files",
+      "category": "目录查看",
+      "success": true,
+      "expected_tools": [
+        "list_dir"
+      ],
+      "actual_tools": [
+        "list_dir"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": false,
+      "expected_tools_loaded": true,
+      "llm_calls": 2,
+      "tool_calls": 1,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 9,
+      "initial_schema_bytes": 2681,
+      "total_schema_bytes": 5362,
+      "latency_ms": 15.95,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    },
+    {
+      "variant": "baseline",
+      "run": 1,
+      "case_id": "syntax_only",
+      "category": "代码检查",
+      "success": true,
+      "expected_tools": [
+        "check_python_syntax"
+      ],
+      "actual_tools": [
+        "check_python_syntax"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": false,
+      "expected_tools_loaded": true,
+      "llm_calls": 2,
+      "tool_calls": 1,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 9,
+      "initial_schema_bytes": 2681,
+      "total_schema_bytes": 5362,
+      "latency_ms": 15.06,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    },
+    {
+      "variant": "baseline",
+      "run": 1,
+      "case_id": "web_research",
+      "category": "网络搜索",
+      "success": true,
+      "expected_tools": [
+        "web_search"
+      ],
+      "actual_tools": [
+        "web_search"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": false,
+      "expected_tools_loaded": true,
+      "llm_calls": 2,
+      "tool_calls": 1,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 9,
+      "initial_schema_bytes": 2681,
+      "total_schema_bytes": 5362,
+      "latency_ms": 14.39,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    },
+    {
+      "variant": "baseline",
+      "run": 1,
+      "case_id": "fetch_web_page",
+      "category": "网页读取",
+      "success": true,
+      "expected_tools": [
+        "web_fetch"
+      ],
+      "actual_tools": [
+        "web_fetch"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": false,
+      "expected_tools_loaded": true,
+      "llm_calls": 2,
+      "tool_calls": 1,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 9,
+      "initial_schema_bytes": 2681,
+      "total_schema_bytes": 5362,
+      "latency_ms": 13.95,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    },
+    {
+      "variant": "baseline",
+      "run": 1,
+      "case_id": "weather_lookup",
+      "category": "天气查询",
+      "success": true,
+      "expected_tools": [
+        "get_weather"
+      ],
+      "actual_tools": [
+        "get_weather"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": false,
+      "expected_tools_loaded": true,
+      "llm_calls": 2,
+      "tool_calls": 1,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 9,
+      "initial_schema_bytes": 2681,
+      "total_schema_bytes": 5362,
+      "latency_ms": 22.05,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    },
+    {
+      "variant": "baseline",
+      "run": 1,
+      "case_id": "fix_and_verify_code",
+      "category": "代码修改闭环",
+      "success": true,
+      "expected_tools": [
+        "read_file",
+        "edit_file",
+        "check_python_syntax",
+        "run_tests"
+      ],
+      "actual_tools": [
+        "read_file",
+        "edit_file",
+        "check_python_syntax",
+        "run_tests"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": false,
+      "expected_tools_loaded": true,
+      "llm_calls": 5,
+      "tool_calls": 4,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 9,
+      "initial_schema_bytes": 2681,
+      "total_schema_bytes": 13405,
+      "latency_ms": 17.13,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    },
+    {
+      "variant": "deferred",
+      "run": 1,
+      "case_id": "read_python_file",
+      "category": "文件读取",
+      "success": true,
+      "expected_tools": [
+        "read_file"
+      ],
+      "actual_tools": [
+        "tool_search",
+        "read_file"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": true,
+      "expected_tools_loaded": true,
+      "llm_calls": 3,
+      "tool_calls": 2,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 1,
+      "initial_schema_bytes": 794,
+      "total_schema_bytes": 6706,
+      "latency_ms": 15.61,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    },
+    {
+      "variant": "deferred",
+      "run": 1,
+      "case_id": "list_project_files",
+      "category": "目录查看",
+      "success": true,
+      "expected_tools": [
+        "list_dir"
+      ],
+      "actual_tools": [
+        "tool_search",
+        "list_dir"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": true,
+      "expected_tools_loaded": true,
+      "llm_calls": 3,
+      "tool_calls": 2,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 1,
+      "initial_schema_bytes": 794,
+      "total_schema_bytes": 7164,
+      "latency_ms": 17.19,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    },
+    {
+      "variant": "deferred",
+      "run": 1,
+      "case_id": "syntax_only",
+      "category": "代码检查",
+      "success": true,
+      "expected_tools": [
+        "check_python_syntax"
+      ],
+      "actual_tools": [
+        "tool_search",
+        "check_python_syntax"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": true,
+      "expected_tools_loaded": true,
+      "llm_calls": 3,
+      "tool_calls": 2,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 1,
+      "initial_schema_bytes": 794,
+      "total_schema_bytes": 7232,
+      "latency_ms": 21.26,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    },
+    {
+      "variant": "deferred",
+      "run": 1,
+      "case_id": "web_research",
+      "category": "网络搜索",
+      "success": true,
+      "expected_tools": [
+        "web_search"
+      ],
+      "actual_tools": [
+        "tool_search",
+        "web_search"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": true,
+      "expected_tools_loaded": true,
+      "llm_calls": 3,
+      "tool_calls": 2,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 1,
+      "initial_schema_bytes": 794,
+      "total_schema_bytes": 4574,
+      "latency_ms": 22.82,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    },
+    {
+      "variant": "deferred",
+      "run": 1,
+      "case_id": "fetch_web_page",
+      "category": "网页读取",
+      "success": true,
+      "expected_tools": [
+        "web_fetch"
+      ],
+      "actual_tools": [
+        "tool_search",
+        "web_fetch"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": true,
+      "expected_tools_loaded": true,
+      "llm_calls": 3,
+      "tool_calls": 2,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 1,
+      "initial_schema_bytes": 794,
+      "total_schema_bytes": 6662,
+      "latency_ms": 18.76,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    },
+    {
+      "variant": "deferred",
+      "run": 1,
+      "case_id": "weather_lookup",
+      "category": "天气查询",
+      "success": true,
+      "expected_tools": [
+        "get_weather"
+      ],
+      "actual_tools": [
+        "tool_search",
+        "get_weather"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": true,
+      "expected_tools_loaded": true,
+      "llm_calls": 3,
+      "tool_calls": 2,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 1,
+      "initial_schema_bytes": 794,
+      "total_schema_bytes": 5072,
+      "latency_ms": 16.76,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    },
+    {
+      "variant": "deferred",
+      "run": 1,
+      "case_id": "fix_and_verify_code",
+      "category": "代码修改闭环",
+      "success": true,
+      "expected_tools": [
+        "read_file",
+        "edit_file",
+        "check_python_syntax",
+        "run_tests"
+      ],
+      "actual_tools": [
+        "tool_search",
+        "read_file",
+        "edit_file",
+        "check_python_syntax",
+        "run_tests"
+      ],
+      "missing_tools": [],
+      "forbidden_tools_called": [],
+      "order_ok": true,
+      "state_ok": true,
+      "tool_search_called": true,
+      "expected_tools_loaded": true,
+      "llm_calls": 6,
+      "tool_calls": 5,
+      "unnecessary_tool_calls": 0,
+      "initial_schema_count": 1,
+      "initial_schema_bytes": 794,
+      "total_schema_bytes": 18169,
+      "latency_ms": 16.2,
+      "reply": "任务已根据工具结果完成。",
+      "error": ""
+    }
+  ]
+}

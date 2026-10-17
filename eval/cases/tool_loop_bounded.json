@@ -1,0 +1,26 @@
+{
+  "name": "工具循环收敛",
+  "category": "工具调用",
+  "description": "LLM 反复请求工具时应在上限内收敛，防止死循环（默认上限 MAX_TOOL_ITERATIONS=10）",
+  "steps": [
+    {"channel": "console", "chat_id": "c1", "sender_id": "u1", "content": "反复调用工具直到你放弃"}
+  ],
+  "script": [
+    [
+      {"type": "tool_calls", "tools": [{"name": "echo_tool", "arguments": {"text": "再来一次"}, "id": "call_1"}]},
+      {"type": "tool_calls", "tools": [{"name": "echo_tool", "arguments": {"text": "再来一次"}, "id": "call_2"}]},
+      {"type": "tool_calls", "tools": [{"name": "echo_tool", "arguments": {"text": "再来一次"}, "id": "call_3"}]},
+      {"type": "tool_calls", "tools": [{"name": "echo_tool", "arguments": {"text": "再来一次"}, "id": "call_4"}]},
+      {"type": "tool_calls", "tools": [{"name": "echo_tool", "arguments": {"text": "再来一次"}, "id": "call_5"}]},
+      {"type": "tool_calls", "tools": [{"name": "echo_tool", "arguments": {"text": "再来一次"}, "id": "call_6"}]},
+      {"type": "tool_calls", "tools": [{"name": "echo_tool", "arguments": {"text": "再来一次"}, "id": "call_7"}]},
+      {"type": "tool_calls", "tools": [{"name": "echo_tool", "arguments": {"text": "再来一次"}, "id": "call_8"}]},
+      {"type": "tool_calls", "tools": [{"name": "echo_tool", "arguments": {"text": "再来一次"}, "id": "call_9"}]},
+      {"type": "tool_calls", "tools": [{"name": "echo_tool", "arguments": {"text": "再来一次"}, "id": "call_10"}]}
+    ]
+  ],
+  "assertions": [
+    {"type": "llm_calls", "step": 0, "max": 10, "desc": "工具循环应在上限 10 次内终止，不无限调用"},
+    {"type": "tool_called", "name": "echo_tool", "desc": "echo_tool 至少被调用一次"}
+  ]
+}

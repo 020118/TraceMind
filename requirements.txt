@@ -1,0 +1,22 @@
+# 运行时依赖
+openai>=1.0
+httpx>=0.27
+ddgs>=9.16,<10
+python-telegram-bot>=21.0
+mcp>=1.0
+# MCP 1.x 仍使用该 Pydantic 内部兼容函数；2.14 已移除。
+pydantic>=2.7,<2.14
+numpy>=1.26
+PyYAML>=6.0
+pypdf>=5.0
+qdrant-client>=1.12,<2
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.30,<0.31
+
+# 可选依赖（proactive_v2 出站文本清洗，缺失时自动降级）
+ftfy>=6.3
+
+# 测试依赖
+pytest>=8.0
+pytest-asyncio>=0.23
+pytest-cov>=5.0

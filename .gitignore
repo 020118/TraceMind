@@ -1,0 +1,67 @@
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+config.toml
+
+# Python environments, caches, and coverage
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime state and local user data
+*.db
+*.sqlite
+*.log
+/sessions/
+/memory/
+/knowledge_docs/
+/.agent_state/
+/.trash/
+/test/
+/.release/
+
+# Frontend dependencies and build output
+/frontend/node_modules/
+/frontend/dist/
+/frontend/*.tsbuildinfo
+
+# Editors and local agent settings
+/.vscode/
+/.idea/
+/.claude/settings.local.json
+
+# Temporary test and audit workspaces
+/.agent-test-tmp/
+/.agent_test_runtime/
+/.codex_audit_tmp/
+/.stream_*_tmp*/
+/.test_tmp*/
+/.code_execution_testdata/
+/.coding_toolchain_testdata/
+/.research_radar_testdata/
+
+# One-off migration/debug scripts kept locally
+/check_db.py
+/fix_*.py
+/final_test*.py
+/test_*.py
+/run_test.py
+/rewrite_snapshot.py
+/*.bat
+
+# Personal notes (not part of the public project)
+/Agent项目面试问题与八股复习手册.md
+/可靠性升级方案.md
+/异常重试与容错机制总结.md
+/消息追溯与执行记录说明.md
+/记忆系统设计文档.md
+/简历项目描述*.md
+/实现流程.md
+/项目总结.md
+/README.zh.md
+/frontend/public/nalong-bot-avatar.svg
