@@ -74,7 +74,7 @@ profile = "daily"          # 预设：daily / dev_verify / quiet
 
 [proactive.target]
 channel = "telegram"            # 推送目标渠道：console / telegram
-chat_id = "8837077427"          # 你的 Telegram 数字 chat_id（sessions.db 里 telegram:8837077427 即此会话）
+chat_id = ""          # 你的 Telegram 数字 chat_id（sessions.db 里 telegram:8837077427 即此会话）
 
 [proactive.agent]
 max_steps = 12                  # judge 阶段 LLM 工具循环步数上限
