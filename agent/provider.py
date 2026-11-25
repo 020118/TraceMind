@@ -18,11 +18,42 @@ logger = logging.getLogger(__name__)
 
 
 class ContentSafetyError(RuntimeError):
-    """内容安全拦截（与上游 provider 契约保持兼容的占位实现）"""
+    """内容安全拦截（由上游安全审核或内容过滤触发）"""
 
 
 class ContextLengthError(RuntimeError):
-    """上下文超长（与上游 provider 契约保持兼容的占位实现）"""
+    """上下文超长（超过模型最大上下文窗口）"""
+
+
+def _classify_provider_error(exc: Exception) -> Exception:
+    """Translate provider-specific error messages into typed domain errors."""
+    if isinstance(exc, (ContentSafetyError, ContextLengthError)):
+        return exc
+    msg = str(exc).lower()
+    if any(
+        token in msg
+        for token in (
+            "context_length_exceeded",
+            "maximum context length",
+            "context window",
+            "too many tokens",
+            "token limit",
+            "input length",
+        )
+    ):
+        return ContextLengthError(str(exc))
+    if any(
+        token in msg
+        for token in (
+            "content_filter",
+            "content_policy",
+            "data_inspection_failed",
+            "inappropriate content",
+            "safety policy",
+        )
+    ):
+        return ContentSafetyError(str(exc))
+    return exc
 
 
 @dataclass
@@ -36,8 +67,12 @@ class ToolCall:
 class LLMResponse:
     content: str | None
     tool_calls: list[ToolCall] = field(default_factory=list)
+    reasoning_content: str | None = None
     cache_prompt_tokens: int | None = None
     cache_hit_tokens: int | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 class LLMProvider:
@@ -54,17 +89,30 @@ class LLMProvider:
         disable_thinking: bool = False,
         extra_body: dict | None = None,
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         **_: Any,
     ) -> LLMResponse:
-        resp = await self._client.chat(
-            messages=messages,
-            tools=list(tools) if tools else None,
-            tool_choice=tool_choice,
-            model=model,
-            max_tokens=max_tokens,
-            extra_body=extra_body,
-            on_content_delta=on_content_delta,
-        )
+        merged_extra = dict(extra_body or {})
+        if disable_thinking:
+            merged_extra.setdefault("enable_thinking", False)
+        client_kwargs: dict[str, Any] = {
+            "messages": messages,
+            "tools": list(tools) if tools else None,
+            "tool_choice": tool_choice,
+            "model": model,
+            "max_tokens": max_tokens,
+            "extra_body": merged_extra or None,
+            "on_content_delta": on_content_delta,
+        }
+        if on_reasoning_delta is not None:
+            client_kwargs["on_reasoning_delta"] = on_reasoning_delta
+        try:
+            resp = await self._client.chat(**client_kwargs)
+        except Exception as exc:
+            classified = _classify_provider_error(exc)
+            if classified is not exc:
+                raise classified from exc
+            raise
         calls: list[ToolCall] = []
         for tc in getattr(resp, "tool_calls", None) or []:
             fn = getattr(tc, "function", None)
@@ -80,4 +128,11 @@ class LLMProvider:
                     arguments=args,
                 )
             )
-        return LLMResponse(content=getattr(resp, "content", None), tool_calls=calls)
+        return LLMResponse(
+            content=getattr(resp, "content", None),
+            reasoning_content=getattr(resp, "reasoning_content", None),
+            tool_calls=calls,
+            prompt_tokens=int(getattr(resp, "prompt_tokens", 0) or 0),
+            completion_tokens=int(getattr(resp, "completion_tokens", 0) or 0),
+            total_tokens=int(getattr(resp, "total_tokens", 0) or 0),
+        )

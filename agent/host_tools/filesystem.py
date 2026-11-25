@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.host_tools.base import Tool, ToolResult
+from agent.security import check_sensitive_path
 
 logger = logging.getLogger(__name__)
 _FILE_MUTATION_LOCKS: dict[str, asyncio.Lock] = {}
@@ -39,6 +40,7 @@ def _resolve_path(path: str, allowed_dir: Path | None = None) -> Path:
         resolved = p.resolve()
     if allowed_dir and not _is_inside(resolved, allowed_dir.resolve()):
         raise PermissionError(f"路径 {path} 超出允许目录 {allowed_dir}")
+    check_sensitive_path(resolved, allowed_dir, for_write=False)
     return resolved
 
 
@@ -46,8 +48,8 @@ def _ensure_mutation_target_is_not_reserved(
     path: Path,
     allowed_dir: Path | None,
 ) -> None:
-    """Keep tools away from recovery data and the session database."""
-
+    """Keep tools away from recovery data, secrets, and the session database."""
+    check_sensitive_path(path, allowed_dir, for_write=True)
     if allowed_dir is None:
         return
     relative = path.relative_to(allowed_dir.resolve())

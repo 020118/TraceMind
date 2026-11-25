@@ -52,6 +52,18 @@ class SessionStore:
                     UNIQUE (session_key, seq)
                 )
                 """)
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS session_summaries (
+                    session_key        TEXT PRIMARY KEY,
+                    summary_json       TEXT NOT NULL,
+                    covered_from_seq   INTEGER NOT NULL,
+                    covered_through_seq INTEGER NOT NULL,
+                    source_hash        TEXT NOT NULL,
+                    version            INTEGER NOT NULL DEFAULT 1,
+                    created_at         TEXT NOT NULL,
+                    updated_at         TEXT NOT NULL
+                )
+                """)
             self._ensure_next_seq_values()
             self._ensure_fts()
             self._conn.commit()
@@ -293,7 +305,21 @@ class SessionStore:
                 s.metadata,
                 s.last_user_at,
                 s.last_proactive_at,
-                COALESCE(msg.message_count, 0) AS message_count
+                COALESCE(msg.message_count, 0) AS message_count,
+                (
+                    SELECT m1.content
+                    FROM messages m1
+                    WHERE m1.session_key = s.key AND m1.role = 'user'
+                    ORDER BY m1.seq ASC
+                    LIMIT 1
+                ) AS first_user_content,
+                (
+                    SELECT m2.content
+                    FROM messages m2
+                    WHERE m2.session_key = s.key AND m2.role IN ('user', 'assistant')
+                    ORDER BY m2.seq DESC
+                    LIMIT 1
+                ) AS last_visible_content
             FROM sessions s
             LEFT JOIN (
                 SELECT session_key, COUNT(1) AS message_count
@@ -321,6 +347,8 @@ class SessionStore:
                 "last_user_at": row["last_user_at"],
                 "last_proactive_at": row["last_proactive_at"],
                 "message_count": int(row["message_count"] or 0),
+                "first_user_content": str(row["first_user_content"] or ""),
+                "last_visible_content": str(row["last_visible_content"] or ""),
             }
             for row in rows
         ], total
@@ -415,6 +443,10 @@ class SessionStore:
                     "DELETE FROM messages WHERE session_key = ?",
                     (key,),
                 )
+            self._conn.execute(
+                "DELETE FROM session_summaries WHERE session_key = ?",
+                (key,),
+            )
             cur = self._conn.execute(
                 "DELETE FROM sessions WHERE key = ?",
                 (key,),
@@ -447,6 +479,10 @@ class SessionStore:
                     f"DELETE FROM messages WHERE session_key IN ({placeholders})",
                     tuple(clean_keys),
                 )
+            self._conn.execute(
+                f"DELETE FROM session_summaries WHERE session_key IN ({placeholders})",
+                tuple(clean_keys),
+            )
             cur = self._conn.execute(
                 f"DELETE FROM sessions WHERE key IN ({placeholders})",
                 tuple(clean_keys),
@@ -553,6 +589,81 @@ class SessionStore:
                 (session_key,),
             ).fetchone()
         return int((row["c"] if row else 0) or 0)
+
+    def get_session_summary(self, session_key: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT session_key, summary_json, covered_from_seq,
+                       covered_through_seq, source_hash, version,
+                       created_at, updated_at
+                FROM session_summaries
+                WHERE session_key = ?
+                """,
+                (session_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "session_key": str(row["session_key"]),
+            "summary": json.loads(row["summary_json"] or "{}"),
+            "covered_from_seq": int(row["covered_from_seq"]),
+            "covered_through_seq": int(row["covered_through_seq"]),
+            "source_hash": str(row["source_hash"]),
+            "version": int(row["version"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
+
+    def upsert_session_summary(
+        self,
+        session_key: str,
+        *,
+        summary: dict[str, Any],
+        covered_from_seq: int,
+        covered_through_seq: int,
+        source_hash: str,
+    ) -> dict[str, Any]:
+        """Atomically save summary content and its coverage cursor."""
+
+        now = datetime.now().astimezone().isoformat()
+        payload = json.dumps(summary, ensure_ascii=False, sort_keys=True)
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                self._conn.execute(
+                    """
+                    INSERT INTO session_summaries (
+                        session_key, summary_json, covered_from_seq,
+                        covered_through_seq, source_hash, version,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                    ON CONFLICT(session_key) DO UPDATE SET
+                        summary_json = excluded.summary_json,
+                        covered_from_seq = session_summaries.covered_from_seq,
+                        covered_through_seq = excluded.covered_through_seq,
+                        source_hash = excluded.source_hash,
+                        version = session_summaries.version + 1,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        session_key,
+                        payload,
+                        int(covered_from_seq),
+                        int(covered_through_seq),
+                        source_hash,
+                        now,
+                        now,
+                    ),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        saved = self.get_session_summary(session_key)
+        if saved is None:
+            raise RuntimeError(f"会话摘要写入失败: {session_key}")
+        return saved
 
     def next_seq(self, session_key: str) -> int:
         with self._lock:
@@ -888,6 +999,33 @@ class SessionStore:
                 )
             self._conn.commit()
         return int(cur.rowcount or 0)
+
+    def truncate_messages_from_seq(self, session_key: str, from_seq: int) -> int:
+        """Delete messages with seq >= from_seq and invalidate affected summaries."""
+        now = datetime.now().astimezone().isoformat()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                cur = self._conn.execute(
+                    "DELETE FROM messages WHERE session_key = ? AND seq >= ?",
+                    (session_key, int(from_seq)),
+                )
+                self._conn.execute(
+                    """
+                    DELETE FROM session_summaries
+                    WHERE session_key = ? AND covered_through_seq >= ?
+                    """,
+                    (session_key, int(from_seq)),
+                )
+                self._conn.execute(
+                    "UPDATE sessions SET updated_at = ? WHERE key = ?",
+                    (now, session_key),
+                )
+                self._conn.commit()
+                return int(cur.rowcount or 0)
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def delete_session_messages_and_update_cursor(
         self,

@@ -14,6 +14,8 @@ class LLMProfile:
     base_url: str = ""
     enable_thinking: bool = False
     multimodal: bool = False
+    input_price_per_million_usd: float = 0.0
+    output_price_per_million_usd: float = 0.0
 
 
 @dataclass
@@ -31,6 +33,8 @@ class MemoryEmbeddingConfig:
     model: str = ""
     api_key: str = ""
     base_url: str = ""
+    input_price_per_million_usd: float = 0.0
+    output_price_per_million_usd: float = 0.0
 
 
 @dataclass
@@ -59,6 +63,12 @@ class RAGConfig:
     chunk_overlap: int = 150
     top_k: int = 6
     rrf_k: int = 60
+    diversify_results: bool = True
+    max_results_per_document: int = 3
+    mmr_lambda: float = 0.75
+    mmr_min_relevance: float = 0.65
+    search_cache_size: int = 128
+    search_cache_ttl_seconds: float = 60.0
     embedding: MemoryEmbeddingConfig = field(default_factory=MemoryEmbeddingConfig)
     vector_store: "RAGVectorStoreConfig" = field(default_factory=lambda: RAGVectorStoreConfig())
 
@@ -96,6 +106,19 @@ class RuntimeConfig:
 
 
 @dataclass
+class ContextConfig:
+    """短期会话上下文与自动摘要配置。"""
+
+    memory_window: int = 40
+    auto_summary: bool = True
+    recent_turns: int = 8
+    summary_trigger_messages: int = 24
+    summary_min_new_messages: int = 8
+    max_prompt_tokens: int = 16000
+    summary_max_tokens: int = 1200
+
+
+@dataclass
 class AgentConfig:
     """根配置 —— 对应 config.toml 完整结构"""
 
@@ -113,6 +136,9 @@ class AgentConfig:
 
     # 运行时
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+
+    # 会话上下文压缩（区别于用户画像/长期记忆）
+    context: ContextConfig = field(default_factory=ContextConfig)
 
     # 主动推送（proactive_v2），原始 TOML 字典，交给 load_proactive_config 解析
     proactive: dict = field(default_factory=dict)

@@ -46,7 +46,7 @@ class BeforeTurnInput:
 class PromptRenderInput:
     channel: str
     chat_id: str
-    content: str
+    content: str | list[dict[str, Any]]
     system_parts: list[str]
     history: list[dict[str, Any]]
     memory_block: str = ""
@@ -372,7 +372,7 @@ class TurnLifecycle:
         *,
         channel: str,
         chat_id: str,
-        content: str,
+        content: str | list[dict[str, Any]],
         system_parts: list[str],
         history: list[dict[str, Any]],
         memory_block: str = "",

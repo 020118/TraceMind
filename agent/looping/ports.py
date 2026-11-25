@@ -29,7 +29,10 @@ class LLMConfig:
     tool_search_enabled: bool = False
     multimodal: bool = True
     vl_available: bool = False
+    vl_model: str = ""
     system_prompt: str = "You are a helpful assistant."
+    input_price_per_million_usd: float = 0.0
+    output_price_per_million_usd: float = 0.0
 
 
 @dataclass
@@ -41,6 +44,17 @@ class MemoryConfig:
         """上下文携带条数，也是 consolidation 后 session 保留条数。"""
         aligned_window = max(4, ((max(1, self.window) + 3) // 4) * 4)
         return aligned_window // 2
+
+
+@dataclass
+class ContextConfig:
+    memory_window: int = 40
+    auto_summary: bool = True
+    recent_turns: int = 8
+    summary_trigger_messages: int = 24
+    summary_min_new_messages: int = 8
+    max_prompt_tokens: int = 16000
+    summary_max_tokens: int = 1200
 
 
 # ── 服务对象分组（仅放对象，不放配置参数）──────────────────────────────────────
@@ -75,6 +89,7 @@ class AgentLoopDeps:
     event_bus: "EventBus | None" = None
     presence: "PresenceStore | None" = None
     light_provider: "LLMProvider | None" = None
+    vl_provider: "LLMProvider | None" = None
     memory_service: "MemoryServiceV2 | None" = None
     reliability_store: "ReliabilityStore | None" = None
     llm_services: LLMServices | None = None
@@ -85,3 +100,5 @@ class AgentLoopDeps:
 class AgentLoopConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    context: ContextConfig = field(default_factory=ContextConfig)
+    max_concurrent_turns: int = 8

@@ -23,6 +23,7 @@ from agent.looping.core import AgentLoop
 from agent.looping.ports import (
     AgentLoopConfig,
     AgentLoopDeps,
+    ContextConfig as LoopContextConfig,
     LLMConfig as LoopLLMConfig,
     MemoryConfig as LoopMemoryConfig,
 )
@@ -30,6 +31,7 @@ from agent.memory.service2 import MemoryServiceV2, create_memory_service_v2
 from agent.provider import LLMProvider
 from agent.rag.service import RAGService, create_rag_service
 from agent.reliability import ReliabilityStore
+from agent.security import redact_secrets
 from agent.tools.amap import register_all_amap_tools as register_amap_direct
 from agent.tools.base import BaseTool, ToolRegistry
 from agent.tools.code_execution import register_code_execution_tools
@@ -40,6 +42,7 @@ from agent.tools.knowledge import register_knowledge_tools
 from agent.tools.tool_search import ToolSearchTool
 from agent.tools.weather import GetWeather
 from agent.tools.web_search import WebFetch, WebSearch
+from agent.usage import ModelUsageRecorder
 from proactive_bootstrap import build_proactive_loop, register_telegram_push
 from session.manager import SessionManager
 
@@ -88,10 +91,12 @@ def setup_tools(
 
 def setup_event_handlers(events: EventBus) -> None:
     async def sensitive_filter(ctx: BeforeTurnCtx) -> BeforeTurnCtx | None:
-        blocked_words = ("敏感词1", "敏感词2")
-        if any(word in ctx.content for word in blocked_words):
-            logger.warning("拦截含敏感词的消息: %s", ctx.content[:30])
-            return None
+        if redact_secrets(ctx.content) != ctx.content:
+            logger.warning(
+                "检测到用户输入中可能包含敏感密钥或凭据 channel=%s session=%s",
+                ctx.channel,
+                ctx.session_key,
+            )
         return ctx
 
     async def log_llm_response(ctx: AfterTurnCtx) -> None:
@@ -185,6 +190,7 @@ class AgentRuntime:
             self.reliability_store = ReliabilityStore(
                 self.workspace / ".agent_state" / "reliability.db"
             )
+            self.usage_recorder = ModelUsageRecorder(self.reliability_store)
             self.bus.configure_outbox(
                 self.reliability_store,
                 durable_channels={"telegram"},
@@ -213,12 +219,15 @@ class AgentRuntime:
             self.session_manager = SessionManager(self.workspace)
             loop_provider = LLMProvider(self.llm)
             light_provider = self._build_light_provider(loop_provider)
+            vl_provider = self._build_vl_provider()
+            vl_cfg = self.config.llm.vl
             self.agent_loop = AgentLoop(
                 AgentLoopDeps(
                     bus=self.bus,
                     event_bus=self.events,
                     provider=loop_provider,
                     light_provider=light_provider,
+                    vl_provider=vl_provider,
                     tools=self.tools,
                     session_manager=self.session_manager,
                     workspace=self.workspace,
@@ -237,9 +246,31 @@ class AgentRuntime:
                         max_tokens=self.config.max_tokens,
                         tool_timeout_seconds=self.config.tool_timeout_seconds,
                         tool_search_enabled=True,
+                        multimodal=main_cfg.multimodal,
+                        vl_available=vl_provider is not None,
+                        vl_model=vl_cfg.model if vl_cfg is not None else "",
                         system_prompt=self.config.system_prompt,
+                        input_price_per_million_usd=(
+                            main_cfg.input_price_per_million_usd
+                        ),
+                        output_price_per_million_usd=(
+                            main_cfg.output_price_per_million_usd
+                        ),
                     ),
                     memory=LoopMemoryConfig(window=self.config.memory_window),
+                    context=LoopContextConfig(
+                        memory_window=self.config.context.memory_window,
+                        auto_summary=self.config.context.auto_summary,
+                        recent_turns=self.config.context.recent_turns,
+                        summary_trigger_messages=(
+                            self.config.context.summary_trigger_messages
+                        ),
+                        summary_min_new_messages=(
+                            self.config.context.summary_min_new_messages
+                        ),
+                        max_prompt_tokens=self.config.context.max_prompt_tokens,
+                        summary_max_tokens=self.config.context.summary_max_tokens,
+                    ),
                 ),
             )
 
@@ -347,8 +378,23 @@ class AgentRuntime:
         logger.info("AgentRuntime 已安全关闭")
 
     def status(self) -> dict[str, Any]:
+        main_cfg = self.config.llm.main
+        degraded: list[str] = []
+        if main_cfg is None or not main_cfg.api_key or not main_cfg.model:
+            degraded.append("llm_not_configured")
+        if self.config.memory.enabled and self.memory_service is None:
+            degraded.append("memory_unavailable")
+        if self.config.rag.enabled and self.rag_service is None:
+            degraded.append("rag_unavailable")
+        if (
+            self.rag_service is not None
+            and self.rag_service.vector_store is not None
+            and not self.rag_service.vector_store.available
+        ):
+            degraded.append("rag_vector_store_unavailable")
         snapshot = {
             "ready": self.ready,
+            "status": "degraded" if degraded else ("ready" if self.ready else "starting"),
             "llm": self.llm is not None,
             "memory": self.memory_service is not None,
             "rag": self.rag_service is not None,
@@ -358,6 +404,25 @@ class AgentRuntime:
             "outbound_queue": self.bus.outbound_size,
             "pending_http_requests": self.api_channel.pending_count,
             "agent_loop": "new" if self.agent_loop is not None else "stopped",
+            "components": {
+                "llm": {
+                    "configured": bool(
+                        main_cfg is not None and main_cfg.api_key and main_cfg.model
+                    ),
+                    "initialized": self.llm is not None,
+                    "model": main_cfg.model if main_cfg is not None else "",
+                    "base_url": main_cfg.base_url if main_cfg is not None else "",
+                },
+                "memory": {
+                    "enabled": self.config.memory.enabled,
+                    "initialized": self.memory_service is not None,
+                },
+                "rag": {
+                    "enabled": self.config.rag.enabled,
+                    "initialized": self.rag_service is not None,
+                },
+            },
+            "degraded": degraded,
         }
         if self.reliability_store is not None:
             snapshot["reliability"] = self.reliability_store.stats()
@@ -426,6 +491,12 @@ class AgentRuntime:
                     "api_key": fast_cfg.api_key,
                     "base_url": fast_cfg.base_url,
                     "model": fast_cfg.model,
+                    "usage_recorder": self.usage_recorder.callback(
+                        model=fast_cfg.model,
+                        purpose="memory_extraction",
+                        input_price_per_million_usd=fast_cfg.input_price_per_million_usd,
+                        output_price_per_million_usd=fast_cfg.output_price_per_million_usd,
+                    ),
                 }
                 if fast_cfg is not None and fast_cfg.api_key
                 else None,
@@ -433,6 +504,12 @@ class AgentRuntime:
                     "api_key": embedding_cfg.api_key,
                     "base_url": embedding_cfg.base_url,
                     "model": embedding_cfg.model,
+                    "usage_recorder": self.usage_recorder.callback(
+                        model=embedding_cfg.model,
+                        purpose="memory_embedding",
+                        input_price_per_million_usd=embedding_cfg.input_price_per_million_usd,
+                        output_price_per_million_usd=embedding_cfg.output_price_per_million_usd,
+                    ),
                 },
                 retrieval_config={
                     "top_k": retrieval_cfg.top_k,
@@ -458,11 +535,23 @@ class AgentRuntime:
                     "api_key": embedding_cfg.api_key,
                     "base_url": embedding_cfg.base_url,
                     "model": embedding_cfg.model,
+                    "usage_recorder": self.usage_recorder.callback(
+                        model=embedding_cfg.model,
+                        purpose="rag_embedding",
+                        input_price_per_million_usd=embedding_cfg.input_price_per_million_usd,
+                        output_price_per_million_usd=embedding_cfg.output_price_per_million_usd,
+                    ),
                 },
                 chunk_size=rag_cfg.chunk_size,
                 chunk_overlap=rag_cfg.chunk_overlap,
                 top_k=rag_cfg.top_k,
                 rrf_k=rag_cfg.rrf_k,
+                diversify_results=rag_cfg.diversify_results,
+                max_results_per_document=rag_cfg.max_results_per_document,
+                mmr_lambda=rag_cfg.mmr_lambda,
+                mmr_min_relevance=rag_cfg.mmr_min_relevance,
+                search_cache_size=rag_cfg.search_cache_size,
+                search_cache_ttl_seconds=rag_cfg.search_cache_ttl_seconds,
                 vector_store_config={
                     "provider": rag_cfg.vector_store.provider,
                     "url": rag_cfg.vector_store.url,
@@ -496,6 +585,32 @@ class AgentRuntime:
                 api_key=fast_cfg.api_key,
                 base_url=fast_cfg.base_url,
                 model=fast_cfg.model,
+                usage_recorder=self.usage_recorder.callback(
+                    model=fast_cfg.model,
+                    purpose="summary_or_auxiliary",
+                    input_price_per_million_usd=fast_cfg.input_price_per_million_usd,
+                    output_price_per_million_usd=fast_cfg.output_price_per_million_usd,
+                ),
+                usage_purpose="summary_or_auxiliary",
+            )
+        )
+
+    def _build_vl_provider(self) -> LLMProvider | None:
+        vl_cfg = self.config.llm.vl
+        if vl_cfg is None or not vl_cfg.api_key or not vl_cfg.model:
+            return None
+        return LLMProvider(
+            LLMClient(
+                api_key=vl_cfg.api_key,
+                base_url=vl_cfg.base_url,
+                model=vl_cfg.model,
+                usage_recorder=self.usage_recorder.callback(
+                    model=vl_cfg.model,
+                    purpose="vision_fallback",
+                    input_price_per_million_usd=vl_cfg.input_price_per_million_usd,
+                    output_price_per_million_usd=vl_cfg.output_price_per_million_usd,
+                ),
+                usage_purpose="vision_fallback",
             )
         )
 

@@ -24,7 +24,6 @@ RUN python -m pip install --no-cache-dir -r requirements.txt \
 
 COPY --chown=agent:agent . .
 COPY --from=frontend-builder --chown=agent:agent /frontend/dist /app/frontend/dist
-RUN cp /app/example_config.toml /app/config.toml
 RUN mkdir -p /home/agent/.akashic/workspace \
     && chown -R agent:agent /home/agent/.akashic
 

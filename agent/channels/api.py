@@ -38,6 +38,8 @@ class ApiChannel:
         content: str,
         sender_id: str | None = None,
         timeout: float = 120.0,
+        mode: str = "balanced",
+        media: list[str] | None = None,
     ) -> tuple[str, OutboundMessage]:
         """Submit one turn and wait for its final outbound message.
 
@@ -60,7 +62,8 @@ class ApiChannel:
                 sender_id=sender_id or session_id,
                 chat_id=request_id,
                 content=content,
-                metadata={"request_id": request_id, "session_id": session_id},
+                media=list(media or []),
+                metadata={"request_id": request_id, "session_id": session_id, "mode": mode},
                 session_key_override=session_key,
             )
             await self._bus.publish_inbound(inbound)
@@ -78,6 +81,8 @@ class ApiChannel:
         content: str,
         sender_id: str | None = None,
         timeout: float = 120.0,
+        mode: str = "balanced",
+        media: list[str] | None = None,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         """Submit one turn and yield structured progress plus the final reply.
 
@@ -101,9 +106,11 @@ class ApiChannel:
                 sender_id=sender_id or session_id,
                 chat_id=request_id,
                 content=content,
+                media=list(media or []),
                 metadata={
                     "request_id": request_id,
                     "session_id": session_id,
+                    "mode": mode,
                     "_stream_event_queue": event_queue,
                 },
                 session_key_override=session_key,

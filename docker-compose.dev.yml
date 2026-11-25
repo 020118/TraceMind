@@ -1,0 +1,32 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.15.5
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_dev_storage:/qdrant/storage
+
+  tracemind:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      AGENT_ENABLE_TELEGRAM: "0"
+      AGENT_ENABLE_PROACTIVE: "0"
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - agent_dev_workspace:/home/agent/.akashic/workspace
+      - ./config.toml:/app/config.toml:ro
+      - ./knowledge_docs:/home/agent/.akashic/workspace/knowledge_docs:ro
+    command: ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    depends_on:
+      - qdrant
+
+volumes:
+  agent_dev_workspace:
+  qdrant_dev_storage:

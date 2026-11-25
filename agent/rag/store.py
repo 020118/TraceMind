@@ -74,6 +74,11 @@ class SQLiteRAGStore:
             ).fetchone()
         return _document_from_row(row) if row else None
 
+    def delete_document(self, document_id: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM rag_documents WHERE id = ?", (document_id,))
+            return cursor.rowcount > 0
+
     def replace_document(
         self, document: DocumentRecord, chunks: list[ChunkRecord]
     ) -> None:

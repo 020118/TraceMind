@@ -1,0 +1,46 @@
+{
+  "name": "TraceMind RAG quality smoke benchmark",
+  "description": "离线验证混合检索、MMR 多样性和 citation 召回的最小数据集。",
+  "documents": [
+    {
+      "path": "docs/agent_runtime.md",
+      "title": "Agent Runtime",
+      "content": "# Agent Loop\nAgent loop 负责生命周期编排、工具调用和工具结果回填。\n\n# Tool Execution\nBeforeStep 执行工具，AfterStep 把结果写回下一次模型推理。\n\n# Lifecycle\nBeforeTurn、BeforeReasoning 和 AfterReasoning 用于观察一轮任务。\n\n# Reliability\n工具超时、失败重试和操作记录用于保证 Agent runtime 稳定。"
+    },
+    {
+      "path": "docs/personal_memory.md",
+      "title": "Personal Memory",
+      "content": "# Memory Store\n个人记忆保存身份、偏好和长期事实，不等同于文档知识库。\n\n# Retrieval\n记忆检索融合关键词和语义相似度，只注入与当前问题相关的内容。\n\n# Preferences\n稳定的用户偏好可以跨会话共享，但短期对话仍按 session 隔离。\n\n# Pending\nPending 缓冲层会合并新增事实，减少 Prompt Cache 频繁失效。"
+    },
+    {
+      "path": "docs/rag.md",
+      "title": "Document RAG",
+      "content": "# Chunking\nRAG 先解析 Markdown、PDF、文本和代码，再按结构切分 chunk。\n\n# Embedding\nEmbedding 把文档和查询转换成向量，支持 Dense 语义检索。\n\n# Hybrid Retrieval\n关键词检索、SQLite 精确 Dense 和 Qdrant ANN 通过 RRF 融合。\n\n# Citation\n检索结果保留 source_path、行号或页码，回答时可以引用原文来源。"
+    }
+  ],
+  "queries": [
+    {
+      "id": "runtime_tools",
+      "query": "Agent loop 生命周期 工具调用 结果回填",
+      "relevance": {"docs/agent_runtime.md": 3}
+    },
+    {
+      "id": "personal_memory",
+      "query": "个人记忆 用户偏好 语义检索",
+      "relevance": {"docs/personal_memory.md": 3}
+    },
+    {
+      "id": "document_rag",
+      "query": "RAG chunk embedding Qdrant citation",
+      "relevance": {"docs/rag.md": 3}
+    },
+    {
+      "id": "memory_and_rag",
+      "query": "memory retrieval RAG retrieval",
+      "relevance": {
+        "docs/personal_memory.md": 3,
+        "docs/rag.md": 3
+      }
+    }
+  ]
+}

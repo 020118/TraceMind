@@ -22,7 +22,6 @@ htmlcov/
 /knowledge_docs/
 /.agent_state/
 /.trash/
-/test/
 /.release/
 
 # Frontend dependencies and build output
@@ -64,4 +63,8 @@ htmlcov/
 /实现流程.md
 /项目总结.md
 /README.zh.md
+/Gemini网页端改造方案.md
 /frontend/public/nalong-bot-avatar.svg
+
+# 测试运行产生的临时目录（统一位于 tests/.artifacts/）
+tests/.artifacts/

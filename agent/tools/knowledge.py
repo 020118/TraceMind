@@ -38,11 +38,54 @@ class KnowledgeIndexFileTool(BaseTool):
         )
 
 
+class KnowledgeSyncDirectoryTool(BaseTool):
+    name = "knowledge_sync_directory"
+    description = (
+        "批量扫描 workspace 内的资料目录并增量加入 RAG 知识库。支持 PDF、"
+        "Markdown、文本、代码和配置；已索引且内容未变化的文件会跳过。"
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "workspace 内的目录，默认当前 workspace",
+            },
+            "recursive": {
+                "type": "boolean",
+                "description": "是否递归扫描子目录，默认 true",
+            },
+            "max_files": {
+                "type": "integer",
+                "description": "本次最多处理的文件数，默认 100，最大 1000",
+                "minimum": 1,
+                "maximum": 1000,
+            },
+        },
+        "required": [],
+    }
+
+    def __init__(self, service: RAGService) -> None:
+        self._service = service
+
+    async def execute(
+        self,
+        path: str = ".",
+        recursive: bool = True,
+        max_files: int = 100,
+        **_: Any,
+    ) -> str:
+        result = await self._service.ingest_directory(
+            path, recursive=bool(recursive), max_files=max_files
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+
 class KnowledgeSearchTool(BaseTool):
     name = "knowledge_search"
     description = (
         "检索已经加入本地 RAG 知识库的研究文档，返回相关原文片段和可追溯来源。"
-        "用于基于资料回答问题；不是网络搜索，也不是查询个人偏好记忆。"
+        "默认会做相似片段去重和跨文档多样性重排；不是网络搜索，也不是查询个人偏好记忆。"
     )
     parameters = {
         "type": "object",
@@ -52,6 +95,16 @@ class KnowledgeSearchTool(BaseTool):
                 "type": "integer", "description": "返回片段数，默认 6，最大 20",
                 "minimum": 1, "maximum": 20,
             },
+            "diversify": {
+                "type": "boolean",
+                "description": "是否对相似片段做多样性重排；默认使用 RAG 配置",
+            },
+            "max_per_document": {
+                "type": "integer",
+                "description": "单篇文档最多返回多少片段；0 表示不限制",
+                "minimum": 0,
+                "maximum": 20,
+            },
         },
         "required": ["query"],
     }
@@ -59,8 +112,20 @@ class KnowledgeSearchTool(BaseTool):
     def __init__(self, service: RAGService) -> None:
         self._service = service
 
-    async def execute(self, query: str, top_k: int = 6, **_: Any) -> str:
-        hits = await self._service.search(query, top_k=top_k)
+    async def execute(
+        self,
+        query: str,
+        top_k: int = 6,
+        diversify: bool | None = None,
+        max_per_document: int | None = None,
+        **_: Any,
+    ) -> str:
+        hits = await self._service.search(
+            query,
+            top_k=top_k,
+            diversify=diversify,
+            max_per_document=max_per_document,
+        )
         if not hits:
             return "知识库中没有找到相关内容。请先用 knowledge_index_file 建立索引。"
         payload = {
@@ -104,7 +169,7 @@ class KnowledgeRetrievalMetricsTool(BaseTool):
     name = "knowledge_retrieval_metrics"
     description = (
         "查看 RAG 检索量化指标，对比 SQLite 精确 Dense 扫描与 Qdrant 检索的"
-        "Recall@K、成功率、P50/P95 延迟和平均加速比。"
+        "Recall@K、成功率、P50/P95 延迟和平均加速比，并查看检索缓存命中率。"
     )
     parameters = {
         "type": "object",
@@ -137,6 +202,11 @@ def register_knowledge_tools(registry: ToolRegistry, service: RAGService) -> Non
         aliases=("导入文档", "建立知识库", "文档索引", "RAG摄取"),
     )
     registry.register(
+        KnowledgeSyncDirectoryTool(service),
+        risk="write",
+        aliases=("批量导入", "同步资料目录", "扫描知识库目录", "目录索引"),
+    )
+    registry.register(
         KnowledgeSearchTool(service),
         risk="read-only",
         aliases=("知识库检索", "文档问答", "查询资料", "RAG检索"),
@@ -158,5 +228,6 @@ __all__ = [
     "KnowledgeListDocumentsTool",
     "KnowledgeRetrievalMetricsTool",
     "KnowledgeSearchTool",
+    "KnowledgeSyncDirectoryTool",
     "register_knowledge_tools",
 ]

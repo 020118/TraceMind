@@ -9,6 +9,9 @@ api_key = "${AGENT_MAIN_API_KEY}"
 base_url = "https://api.deepseek.com/v1"
 enable_thinking = true
 multimodal = false
+# 可选：按每百万 token 配置价格；留空/0 时只统计 token，不估算费用。
+input_price_per_million_usd = 0
+output_price_per_million_usd = 0
 
 [llm.fast]
 # 轻量模型，用于 memory gate / query rewrite / HyDE。
@@ -16,6 +19,8 @@ multimodal = false
 model = "qwen-flash"
 api_key = "${AGENT_FAST_API_KEY}"
 base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+input_price_per_million_usd = 0
+output_price_per_million_usd = 0
 
 [llm.vl]
 # 视觉模型，仅在 llm.main.multimodal = false 时需要。
@@ -32,6 +37,8 @@ engine = ""                     # 记忆引擎，留空 = default_memory 插件
 model = "text-embedding-v3"     # 向量模型
 api_key = "${AGENT_EMBEDDING_API_KEY}"
 base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+input_price_per_million_usd = 0
+output_price_per_million_usd = 0
 
 [memory.retrieval]
 top_k = 6                       # 每轮最多注入的记忆片段数
@@ -46,6 +53,12 @@ chunk_size = 1200               # 每个分块的最大字符数
 chunk_overlap = 150             # 相邻分块重叠字符数，避免语义在边界断开
 top_k = 6                       # 每次知识库检索返回的片段数
 rrf_k = 60                      # RRF 融合常数，一般无需调整
+diversify_results = true        # 是否对相似片段做 MMR 多样性重排
+max_results_per_document = 3    # 单篇文档最多占用的结果数；0 表示不限制
+mmr_lambda = 0.75               # 相关性与多样性的平衡，越大越偏向相关性
+mmr_min_relevance = 0.65        # 低于最高分65%的片段不参与多样性竞争
+search_cache_size = 128         # 最近检索结果缓存条数；设为0关闭
+search_cache_ttl_seconds = 60   # 缓存有效期（秒），索引更新时会立即失效
 
 [rag.vector_store]
 provider = "qdrant"
@@ -72,9 +85,19 @@ enabled = false
 tool_timeout_seconds = 30
 profile = "daily"          # 预设：daily / dev_verify / quiet
 
+[agent.context]
+# 会话摘要只压缩送给模型的旧上下文，不删除 sessions.db 中的原始消息。
+memory_window = 40
+auto_summary = true
+recent_turns = 8
+summary_trigger_messages = 24
+summary_min_new_messages = 8
+max_prompt_tokens = 16000
+summary_max_tokens = 1200
+
 [proactive.target]
 channel = "telegram"            # 推送目标渠道：console / telegram
-chat_id = ""          # 你的 Telegram 数字 chat_id（sessions.db 里 telegram:8837077427 即此会话）
+chat_id = "8837077427"          # 你的 Telegram 数字 chat_id（sessions.db 里 telegram:8837077427 即此会话）
 
 [proactive.agent]
 max_steps = 12                  # judge 阶段 LLM 工具循环步数上限

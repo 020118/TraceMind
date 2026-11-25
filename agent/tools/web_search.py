@@ -11,10 +11,16 @@ from __future__ import annotations
 
 import logging
 
+from urllib.parse import urljoin
+
 import httpx
 from ddgs import DDGS
 
+from agent.security import validate_public_http_url
 from agent.tools.base import BaseTool
+
+_MAX_FETCH_BYTES = 2 * 1024 * 1024
+_MAX_REDIRECTS = 5
 
 logger = logging.getLogger(__name__)
 
@@ -87,21 +93,46 @@ class WebFetch(BaseTool):
     }
 
     async def execute(self, url: str, max_chars: int = 3000) -> str:
-        """抓取网页文本内容"""
+        """抓取网页文本内容（带 SSRF 校验、逐跳重定向校验与响应体大小限制）"""
         logger.info("网页抓取: %s", url)
         max_chars = min(max(200, max_chars), 10000)
 
         try:
+            current_url = validate_public_http_url(url)
+        except PermissionError as exc:
+            return f"抓取失败: {exc}"
+
+        try:
             async with httpx.AsyncClient(
                 timeout=15,
-                follow_redirects=True,
+                follow_redirects=False,
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 },
             ) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                content = resp.text
+                content = ""
+                for _ in range(_MAX_REDIRECTS + 1):
+                    async with client.stream("GET", current_url) as resp:
+                        if resp.is_redirect and resp.headers.get("location"):
+                            next_url = urljoin(current_url, resp.headers["location"])
+                            current_url = validate_public_http_url(next_url)
+                            continue
+                        resp.raise_for_status()
+                        chunks: list[bytes] = []
+                        total = 0
+                        async for chunk in resp.aiter_bytes():
+                            total += len(chunk)
+                            if total > _MAX_FETCH_BYTES:
+                                chunks.append(chunk[: max(0, _MAX_FETCH_BYTES - (total - len(chunk)))])
+                                break
+                            chunks.append(chunk)
+                        encoding = resp.encoding or "utf-8"
+                        content = b"".join(chunks).decode(encoding, errors="replace")
+                        break
+                else:
+                    return f"抓取失败: 重定向次数过多 ({url})"
+        except PermissionError as exc:
+            return f"抓取失败: {exc}"
         except httpx.TimeoutException:
             return f"请求超时: {url}"
         except httpx.HTTPStatusError as e:

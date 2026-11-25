@@ -241,7 +241,7 @@ def test_session_create_list_order_and_isolated_history(tmp_path) -> None:
 
         assert first.status_code == 201
         assert second.status_code == 201
-        assert first_id != second_id
+        assert first_id == second_id
 
         first_session = runtime.session_manager.get_existing(f"api:{first_id}")
         assert first_session is not None
@@ -249,9 +249,14 @@ def test_session_create_list_order_and_isolated_history(tmp_path) -> None:
         first_session.add_message("assistant", "每个会话保存独立历史。")
         runtime.session_manager.save(first_session)
 
+        third = client.post("/v1/sessions")
+        third_id = third.json()["session"]["session_id"]
+        assert third.status_code == 201
+        assert third_id != first_id
+
         listing = client.get("/v1/sessions")
         first_history = client.get(f"/v1/sessions/{first_id}/messages")
-        second_history = client.get(f"/v1/sessions/{second_id}/messages")
+        second_history = client.get(f"/v1/sessions/{third_id}/messages")
 
     sessions = listing.json()["sessions"]
     assert sessions[0]["session_id"] == first_id
@@ -275,6 +280,25 @@ def test_reading_unknown_session_does_not_create_empty_row(tmp_path) -> None:
     assert response.status_code == 200
     assert response.json()["messages"] == []
     assert listing.json()["sessions"] == []
+
+
+def test_delete_session_keeps_one_blank_replacement(tmp_path) -> None:
+    runtime = _SessionRuntime(tmp_path)
+    app = create_app(runtime_factory=lambda: runtime)
+
+    with TestClient(app) as client:
+        created = client.post("/v1/sessions")
+        session_id = created.json()["session"]["session_id"]
+        deleted = client.delete(f"/v1/sessions/{session_id}")
+        listing = client.get("/v1/sessions")
+
+    assert deleted.status_code == 200
+    replacement = deleted.json()["replacement_session"]
+    assert replacement["session_id"] != session_id
+    sessions = listing.json()["sessions"]
+    assert len(sessions) == 1
+    assert sessions[0]["message_count"] == 0
+    assert sessions[0]["session_id"] == replacement["session_id"]
 
 
 def test_operation_confirmation_is_scoped_and_returns_trace(tmp_path) -> None:

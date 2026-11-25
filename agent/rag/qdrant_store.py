@@ -118,6 +118,16 @@ class QdrantVectorStore:
                 wait=True,
             )
 
+    async def delete_document(self, document_id: str) -> None:
+        self._require_available()
+        ids = await self._document_point_ids(document_id)
+        if ids:
+            await self._client.delete(
+                collection_name=self.collection,
+                points_selector=self._models.PointIdsList(points=ids),
+                wait=True,
+            )
+
     async def search(
         self, query_vector: list[float], *, limit: int
     ) -> list[VectorSearchResult]:

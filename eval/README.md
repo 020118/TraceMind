@@ -36,6 +36,23 @@ python -m eval.tool_discovery_ab --mode real --runs 1 --variant deferred
 - `eval/results/tool_discovery_ab_<mode>.md`
 - `eval/results/tool_discovery_ab_<mode>.json`
 
+## RAG 质量评测
+
+使用离线标注数据跑生产 `RAGService`，对比普通 RRF 和当前 RRF+MMR 策略：
+
+```powershell
+python -m eval.rag_quality
+```
+
+默认使用 `eval/datasets/rag_quality_smoke.json`，其中包含一组小型文档和查询标注，
+使用确定性的本地 Hash Embedding，不调用外部模型或 Embedding API。结果写入：
+
+- `eval/results/rag_quality_smoke.json`
+- `eval/results/rag_quality_smoke.md`
+
+报告包括 `Recall@K`、`MRR`、`nDCG@K`、citation presence 覆盖率（返回片段是否带可追溯来源，不等于最终答案引用正确率）、空结果率、Top-K 的文档覆盖数和延迟。
+这个 smoke benchmark 用于回归检验检索策略；要衡量真实业务质量，还需要用真实研究资料和人工标注的相关性等级替换示例数据。
+
 报告包含任务成功率、工具选择准确率/召回率、工具搜索调用率、
 Schema 加载率、无效工具调用率、初始/累计 Schema 字节、LLM 调用数和耗时。
 确定性模式不代表真实模型能力；面试时应使用 `--mode real`、多次重复的结果。

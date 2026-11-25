@@ -190,26 +190,35 @@ class Session:
         max_messages: int = 500,
         *,
         start_index: int | None = None,
+        after_seq: int | None = None,
     ) -> list[dict[str, Any]]:
         """将 session 消息展开为 LLM 可直接使用的 OpenAI 格式消息列表。"""
+        source_messages = self.messages
+        if after_seq is not None:
+            source_messages = [
+                message
+                for message in self.messages
+                if int(message.get("seq", -1)) > int(after_seq)
+            ]
+
         if start_index is not None:
             if max_messages <= 0:
                 return []
             start = max(0, int(start_index))
-            if start >= len(self.messages):
+            if start >= len(source_messages):
                 return []
             # 向前回退到最近的 user 边界（保留完整 turn）
             while (
                 start > 0
-                and self.messages[start].get("role") != "user"
+                and source_messages[start].get("role") != "user"
                 and not (
-                    self.messages[start].get("role") == "assistant"
-                    and self.messages[start].get("proactive")
+                    source_messages[start].get("role") == "assistant"
+                    and source_messages[start].get("proactive")
                 )
             ):
                 start -= 1
             # start=0 但仍非合法边界时，向后找第一个 user 或 proactive assistant。
-            messages = self.messages[start:]
+            messages = source_messages[start:]
             if messages and not (
                 messages[0].get("role") == "user"
                 or (
@@ -223,7 +232,7 @@ class Session:
         elif max_messages <= 0:
             messages = []
         else:
-            messages = self.messages[-max_messages:]
+            messages = _align_to_user_boundary(source_messages[-max_messages:])
         out: list[dict[str, Any]] = []
         for m in messages:
             role = m.get("role")
@@ -368,9 +377,36 @@ class SessionManager:
     def session_exists(self, key: str) -> bool:
         return self._store.session_exists(key)
 
+    def delete_session(self, key: str) -> bool:
+        """Delete a session and all of its persisted messages."""
+        deleted = self._store.delete_session(key, cascade=True)
+        self._cache.pop(key, None)
+        self._write_locks.pop(key, None)
+        return deleted
+
     def peek_next_message_id(self, session_key: str) -> str:
         next_seq = self._store.next_seq(session_key)
         return f"{session_key}:{next_seq}"
+
+    def get_summary(self, session_key: str) -> dict[str, Any] | None:
+        return self._store.get_session_summary(session_key)
+
+    def save_summary(
+        self,
+        session_key: str,
+        *,
+        summary: dict[str, Any],
+        covered_from_seq: int,
+        covered_through_seq: int,
+        source_hash: str,
+    ) -> dict[str, Any]:
+        return self._store.upsert_session_summary(
+            session_key,
+            summary=summary,
+            covered_from_seq=covered_from_seq,
+            covered_through_seq=covered_through_seq,
+            source_hash=source_hash,
+        )
 
     def _load(self, key: str) -> Session | None:
         meta = self._store.get_session_meta(key)
@@ -503,6 +539,37 @@ class SessionManager:
             item["path"] = str(self.db_path)
         return sessions
 
+    def update_session_metadata(
+        self,
+        key: str,
+        *,
+        title: str | None = None,
+        pinned: bool | None = None,
+    ) -> dict[str, Any] | None:
+        """Update dashboard metadata fields (title, pinned) for a session."""
+        meta = self._store.get_session_meta(key)
+        if meta is None:
+            return None
+        metadata = dict(meta.get("metadata") or {})
+        if title is not None:
+            clean_title = " ".join(title.split())[:80]
+            if clean_title:
+                metadata["title"] = clean_title
+            else:
+                metadata.pop("title", None)
+        if pinned is not None:
+            metadata["pinned"] = bool(pinned)
+        updated = self._store.update_session(key, metadata=metadata)
+        if key in self._cache:
+            self._cache[key].metadata = metadata
+        return updated
+
+    def truncate_from_seq(self, key: str, from_seq: int) -> int:
+        """Truncate messages from seq onward for edit/regenerate flows."""
+        deleted = self._store.truncate_messages_from_seq(key, from_seq)
+        self._cache.pop(key, None)
+        return deleted
+
     def list_dashboard_sessions(
         self,
         *,
@@ -521,21 +588,8 @@ class SessionManager:
         result: list[dict[str, Any]] = []
         for row in rows:
             key = str(row["key"])
-            messages = self._store.fetch_session_messages(key)
-            visible = [
-                message
-                for message in messages
-                if str(message.get("role", "")) in {"user", "assistant"}
-            ]
-            first_user = next(
-                (
-                    str(message.get("content", ""))
-                    for message in visible
-                    if message.get("role") == "user"
-                ),
-                "",
-            )
-            last_content = str(visible[-1].get("content", "")) if visible else ""
+            first_user = str(row.get("first_user_content") or "")
+            last_content = str(row.get("last_visible_content") or "")
             metadata = dict(row.get("metadata") or {})
             explicit_title = str(metadata.get("title", "")).strip()
             title = explicit_title or _session_summary_text(first_user, 28) or "新会话"
@@ -547,9 +601,40 @@ class SessionManager:
                     "created_at": str(row.get("created_at") or ""),
                     "updated_at": str(row.get("updated_at") or ""),
                     "message_count": int(row.get("message_count", 0) or 0),
+                    "pinned": bool(metadata.get("pinned", False)),
                 }
             )
+        result.sort(key=lambda item: (not item["pinned"],))
         return result
+
+    def search_messages(
+        self,
+        query: str,
+        *,
+        channel: str = "api",
+        limit: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Search persisted conversation messages for the dashboard."""
+        rows, total = self._store.search_messages(
+            query,
+            limit=max(1, min(int(limit), 100)),
+        )
+        prefix = f"{channel}:"
+        visible: list[dict[str, Any]] = []
+        for row in rows:
+            key = str(row.get("session_key", ""))
+            if not key.startswith(prefix) or row.get("role") not in {"user", "assistant"}:
+                continue
+            visible.append(
+                {
+                    "session_id": key[len(prefix):],
+                    "role": str(row.get("role", "")),
+                    "content": str(row.get("content", "")),
+                    "timestamp": str(row.get("timestamp", "")),
+                    "message_id": str(row.get("id", "")),
+                }
+            )
+        return visible, len(visible) if len(visible) < total else total
 
     def get_channel_metadata(self, channel: str) -> list[dict[str, Any]]:
         try:

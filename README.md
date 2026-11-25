@@ -14,11 +14,12 @@
 | 工具系统 | `BaseTool + ToolRegistry`、风险/别名/来源元数据、`tool_search`、延迟 Schema 加载、并行与串行执行 |
 | Coding Agent | workspace 内文件列表/读取/写入/精确编辑/受控删除、Python 语法检查、受限 pytest 验证 |
 | 长期记忆 | Memory V2 分层文件、Pending 缓冲、定期合并、语义+关键词混合检索、会话历史持久化 |
+| 长上下文 | 旧对话增量摘要、最近轮次原文保留、Prompt 超预算前紧急压缩、摘要失败安全回退 |
 | 文档 RAG | PDF/Markdown/文本/代码解析、Chunking、Embedding、Qdrant Dense + 关键词 + RRF、citation、故障降级 |
 | 多通道 | Web / FastAPI / Console / Telegram，共用同一套 `AgentRuntime` 和消息总线；Web 支持独立多会话与最近使用排序 |
 | 流式交互 | LLM 真正增量输出；工具参数碎片重组；NDJSON 推送模型、工具和错误事件 |
 | 主动 Agent | Gate / Source / Judge / Resolve / Deliver，支持冷却、去重、证据和投递记录 |
-| 可靠性 | 删除操作二次确认与 journal、会话事务写入、发送重试与死信、Qdrant 补偿同步 |
+| 可靠性 | 删除操作二次确认与 journal、任务 trace/checkpoint、会话事务写入、发送重试与死信、Qdrant 补偿同步 |
 | 部署 | React/Vite + FastAPI 多阶段镜像，Docker Compose 编排 Agent 与 Qdrant，健康检查与持久卷 |
 
 ---
@@ -86,6 +87,13 @@ Copy-Item .env.example .env
 Copy-Item example_config.toml config.toml
 ```
 
+macOS/Linux：
+
+```bash
+cp .env.example .env
+cp example_config.toml config.toml
+```
+
 至少填写：
 
 ```dotenv
@@ -96,6 +104,19 @@ QDRANT_URL=http://qdrant:6333
 ```
 
 `config.toml` 支持 `${ENV_NAME}` 占位符。Telegram、主动推送和高德地图均为可选能力。
+
+Docker Compose 会把根目录的 `config.toml` 以只读方式挂载进容器；模型配置不会写入镜像。
+更新模型或价格配置后，重新创建 `tracemind` 容器即可：
+
+```bash
+docker compose up -d --force-recreate tracemind
+```
+
+模型调用、Token 数量和估算费用会写入工作区的可靠性数据库，并可通过
+`GET /v1/usage` 查看。费用需要在 `[llm.main]` 中填写每百万输入/输出
+Token 的价格；价格留空或为 0 时仍会统计调用次数和 Token，但费用显示为 0。
+
+`[agent.context]` 控制会话上下文：默认累计到 24 条未摘要消息后，在回答落库后后台生成增量摘要，并保留最近 8 轮原文；如果下一次 Prompt 预计超过 16000 tokens，则会在模型调用前执行一次紧急压缩。摘要和覆盖游标原子写入 SQLite，原始消息不会被删除。
 
 ### 2. Docker Compose（推荐演示方式）
 
@@ -108,9 +129,22 @@ docker compose up --build
 - Web 工作台：`http://127.0.0.1:8000`
 - Swagger：`http://127.0.0.1:8000/docs`
 - Agent 健康与就绪：`/health`、`/ready`
+- 用量统计：`/v1/usage`
+- 知识库：`/v1/knowledge/documents`、`/v1/knowledge/upload`
+- 会话全文搜索：`/v1/search?q=关键词`
+- 停止/重试任务：`/v1/sessions/{session_id}/interrupt`、`/v1/tasks/{trace_id}/resume`
 - Qdrant Dashboard：`http://127.0.0.1:6333/dashboard`
 
 Compose 会启动两个容器：`tracemind` 和 `qdrant`。Agent 工作区与 Qdrant 数据分别使用持久卷；`knowledge_docs` 以只读方式挂载到 Agent workspace。
+
+开发时可以使用带后端热重载的配置：
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+
+开发配置会挂载源代码并运行 `uvicorn --reload`；前端仍可在宿主机的
+`frontend` 目录执行 `npm run dev`。
 
 停止服务：
 
@@ -160,6 +194,8 @@ npm run dev
 | `GET /v1/sessions/{session_id}/messages` | 恢复会话消息 |
 | `POST /v1/operations/{operation_id}/confirm` | 确认待执行的破坏性操作 |
 | `POST /v1/operations/{operation_id}/cancel` | 取消待执行操作 |
+| `GET /v1/sessions/{session_id}/tasks` | 查询会话最近的任务状态、阶段和工具链 |
+| `GET /v1/tasks/{trace_id}?session_id=...` | 查询单次任务的完整 trace 与最近 checkpoint |
 | `GET /v1/rag/metrics` | Qdrant 与 SQLite shadow evaluation 指标 |
 
 普通请求示例：
@@ -177,6 +213,12 @@ Web 会话的短期消息、工具链和待确认操作按 `session_id` 隔离�
 
 FastAPI 模式默认不启动 Telegram 和主动调度器；需要时设置 `AGENT_ENABLE_TELEGRAM=1` 或 `AGENT_ENABLE_PROACTIVE=1`。
 
+Web 控制台现在支持上传资料并立即建立 RAG 索引、移除知识库文档、跨会话搜索、停止当前生成和重试中断任务。发送框旁的模型模式会影响本轮工具循环上限：`省钱·快速` 最多 3 轮，`标准·平衡` 使用配置值，`深度·多轮` 最多扩展到 20 轮；侧栏用量卡可查看累计 token 和估算费用。
+
+每次 `/v1/chat` 成功响应都会返回唯一的 `trace_id`。Agent 在首次模型调用前创建任务记录，在等待模型、执行工具和继续推理前保存 checkpoint；可以用上面的两个任务接口查询执行进度、工具链和失败原因。任务记录保存在 workspace 下 `.agent_state/reliability.db` 的 `task_runs` 表中。
+
+如果进程在一轮任务中途退出，启动时不会盲目重放整轮对话（工具可能有重复副作用），而是把仍处于 `RUNNING` 的任务标为 `NEEDS_REVIEW`，保留最后 checkpoint 供人工检查。已经进入删除 journal 的确认/执行阶段的操作仍按既有的 operation recovery 规则处理。
+
 ---
 
 ## RAG 使用方式
@@ -184,9 +226,12 @@ FastAPI 模式默认不启动 Telegram 和主动调度器；需要时设置 `AGE
 通过对话让 Agent 调用以下工具：
 
 - `knowledge_index_file`：把 workspace 内文件加入知识库。
+- `knowledge_sync_directory`：批量扫描目录并增量索引支持的资料，单个文件失败不会阻塞整批任务。
 - `knowledge_search`：执行混合检索并返回 citation。
 - `knowledge_list_documents`：列出已索引文档。
 - `knowledge_retrieval_metrics`：查看 Recall@K、成功率、P50/P95 延迟和平均加速比。
+
+RAG 检索在 RRF 后默认使用本地 MMR 多样性重排，并限制单篇文档最多占用的结果数，避免 Top-K 被同一篇资料的相邻重复片段占满；同时用 `mmr_min_relevance` 排除与最高分差距过大的弱相关片段，只有结果不足时才作为召回兜底。`diversify_results`、`max_results_per_document`、`mmr_lambda` 和 `mmr_min_relevance` 可在 `[rag]` 中调整。检索还带有一个进程内 LRU+TTL 缓存：相同问题在短时间内重复出现时，直接复用已经融合好的结果，避免重复调用 Embedding API；文档重新索引后缓存会立即失效，避免返回旧片段。缓存命中、未命中、容量和命中率可通过 `knowledge_retrieval_metrics` 或 `/v1/rag/metrics` 查看。可以在 `[rag]` 中用 `search_cache_size = 0` 关闭缓存，或调整 `search_cache_ttl_seconds`。
 
 默认 collection 为 `agent_knowledge_v1`。SQLite 数据位于 workspace 的 `knowledge/rag.db`，保存文档、chunks、Embedding 副本、Qdrant 同步状态和评测数据；Qdrant 专门负责近邻向量检索。
 
@@ -209,7 +254,7 @@ agent/
 ├── bus/                     消息总线与事件总线
 └── channels/                API、Console、Telegram、Dispatcher
 proactive_v2/                主动 Agent 管线
-session/                     会话与消息事务存储
+session/                     会话、消息事务存储与旧对话增量摘要
 eval/                        离线评测与 Mock LLM
 tests/                       单元、回归与集成测试
 Dockerfile                   Node/Python 多阶段镜像
@@ -230,6 +275,8 @@ npm run build
 
 测试大量使用 Fake LLM、Mock Embedding/HTTP/Qdrant，保证离线、可复现且不消耗模型费用。发布前仍应在新构建的 Docker 镜像中重跑一次完整测试。
 
+RAG 还提供独立的离线质量评测：`python -m eval.rag_quality` 会在示例标注集上对比 RRF 与 RRF+MMR，并输出 Recall@K、MRR、nDCG@K、citation presence、文档覆盖数和延迟。这里的 citation presence 只检查检索片段是否带来源元数据，不等于最终答案引用正确率。
+
 ---
 
 ## 已解决的典型问题
@@ -240,14 +287,15 @@ npm run build
 4. 删除等破坏性操作不应直接执行：使用唯一 `operation_id`、二次确认和持久化 journal。
 5. Qdrant 是外部服务，可能不可用：保留 SQLite 精确 Dense 与关键词降级，并记录同步状态和 shadow metrics。
 6. 前端动画不等于真实流式：模型 delta、工具事件和最终结果通过 NDJSON 端到端传输。
+7. 一轮任务中途崩溃后难以定位：增加 `task_runs`、唯一 `trace_id` 和阶段 checkpoint；恢复时保守地进入人工复核，避免重复执行非幂等工具。
 
 ---
 
 ## 当前边界与后续计划
 
-- [ ] 用真实研究资料构建 RAG 评测集，补 Recall@K、MRR/nDCG、引用正确率和答案忠实度
+- [ ] 用真实研究资料替换当前 RAG smoke benchmark，继续补充引用正确率和答案忠实度
 - [ ] 增加 Rerank、OCR、目录增量同步和知识库管理页面
-- [ ] 在现有 Outbox 基础上增加持久化 Inbox、渠道 ACK 对账、统一 trace/span、客户端断开取消与断线续传
+- [ ] 在现有 Outbox 基础上增加持久化 Inbox、渠道 ACK 对账、统一 trace/span、客户端断开取消与断线续传（当前已先完成任务级 trace/checkpoint）
 - [ ] GitHub Actions：测试、镜像构建、漏洞扫描与发布
 - [ ] Nginx/Caddy、HTTPS、限流、密钥轮换与正式云部署
 - [ ] 将不可信代码运行拆到短生命周、默认断网的独立 Runner 容器或 microVM

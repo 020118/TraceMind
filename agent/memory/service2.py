@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -246,6 +247,7 @@ def create_memory_service_v2(
     embedding_config: dict | None = None,
     retrieval_config: dict | None = None,
     max_history_chars: int = 100000,
+    usage_recorder: Callable[[dict], None] | None = None,
 ) -> MemoryServiceV2:
     """创建 MemoryServiceV2 实例
 
@@ -271,6 +273,8 @@ def create_memory_service_v2(
             api_key=fast_llm_config["api_key"],
             base_url=fast_llm_config["base_url"],
             model=fast_llm_config["model"],
+            usage_recorder=fast_llm_config.get("usage_recorder"),
+            usage_purpose="memory_extraction",
         )
 
     embedding_config = embedding_config or {}
@@ -285,6 +289,7 @@ def create_memory_service_v2(
         score_threshold=float(retrieval_config.get("score_threshold", 0.35)),
         semantic_weight=float(retrieval_config.get("semantic_weight", 0.7)),
         keyword_weight=float(retrieval_config.get("keyword_weight", 0.3)),
+        usage_recorder=usage_recorder or embedding_config.get("usage_recorder"),
     )
 
     return MemoryServiceV2(store=store, fast_llm=fast_llm, retriever=retriever)

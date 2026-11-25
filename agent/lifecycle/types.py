@@ -62,7 +62,7 @@ class PromptRenderCtx:
 
     channel: str
     chat_id: str
-    content: str
+    content: str | list[dict[str, Any]]
     system_parts: list[str] = field(default_factory=_empty_str_list)
     history: list[dict[str, Any]] = field(default_factory=list)
     memory_block: str = ""

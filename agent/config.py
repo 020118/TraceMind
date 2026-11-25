@@ -17,6 +17,7 @@ from agent.config_models import (
     RAGConfig,
     RAGVectorStoreConfig,
     ChannelsConfig,
+    ContextConfig,
     TelegramConfig,
     RuntimeConfig,
 )
@@ -55,6 +56,8 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             model=str(embed_raw.get("model", "")),
             api_key=_resolve(str(embed_raw.get("api_key", ""))),
             base_url=str(embed_raw.get("base_url", "")),
+            input_price_per_million_usd=max(0.0, float(embed_raw.get("input_price_per_million_usd", 0.0))),
+            output_price_per_million_usd=max(0.0, float(embed_raw.get("output_price_per_million_usd", 0.0))),
         ),
         retrieval=MemoryRetrievalConfig(
             top_k=_clamp_int(retrieval_raw.get("top_k", 6), 1, 20),
@@ -81,12 +84,46 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
         chunk_overlap=_clamp_int(rag_raw.get("chunk_overlap", 150), 0, 2000),
         top_k=_clamp_int(rag_raw.get("top_k", 6), 1, 20),
         rrf_k=_clamp_int(rag_raw.get("rrf_k", 60), 1, 1000),
+        diversify_results=bool(rag_raw.get("diversify_results", True)),
+        max_results_per_document=_clamp_int(
+            rag_raw.get("max_results_per_document", 3), 0, 20
+        ),
+        mmr_lambda=_clamp_float(
+            rag_raw.get("mmr_lambda", 0.75), 0.0, 1.0
+        ),
+        mmr_min_relevance=_clamp_float(
+            rag_raw.get("mmr_min_relevance", 0.65), 0.0, 1.0
+        ),
+        search_cache_size=_clamp_int(
+            rag_raw.get("search_cache_size", 128), 0, 10_000
+        ),
+        search_cache_ttl_seconds=_clamp_float(
+            rag_raw.get("search_cache_ttl_seconds", 60.0), 0.0, 86_400.0
+        ),
         embedding=MemoryEmbeddingConfig(
             model=str(rag_embed_raw.get("model", memory.embedding.model)),
             api_key=_resolve(
                 str(rag_embed_raw.get("api_key", memory.embedding.api_key))
             ),
             base_url=str(rag_embed_raw.get("base_url", memory.embedding.base_url)),
+            input_price_per_million_usd=max(
+                0.0,
+                float(
+                    rag_embed_raw.get(
+                        "input_price_per_million_usd",
+                        memory.embedding.input_price_per_million_usd,
+                    )
+                ),
+            ),
+            output_price_per_million_usd=max(
+                0.0,
+                float(
+                    rag_embed_raw.get(
+                        "output_price_per_million_usd",
+                        memory.embedding.output_price_per_million_usd,
+                    )
+                ),
+            ),
         ),
         vector_store=RAGVectorStoreConfig(
             provider=str(vector_store_raw.get("provider", "sqlite")).strip().lower(),
@@ -130,6 +167,25 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
     # ── Agent 通用配置 ──────────────────────────────────
     agent_raw = _as_dict(data.get("agent"))
     agent_ctx = _as_dict(agent_raw.get("context"))
+    context = ContextConfig(
+        memory_window=_clamp_int(
+            agent_ctx.get("memory_window", data.get("memory_window", 40)), 4, 500
+        ),
+        auto_summary=bool(agent_ctx.get("auto_summary", True)),
+        recent_turns=_clamp_int(agent_ctx.get("recent_turns", 8), 2, 50),
+        summary_trigger_messages=_clamp_int(
+            agent_ctx.get("summary_trigger_messages", 24), 4, 1000
+        ),
+        summary_min_new_messages=_clamp_int(
+            agent_ctx.get("summary_min_new_messages", 8), 2, 200
+        ),
+        max_prompt_tokens=_clamp_int(
+            agent_ctx.get("max_prompt_tokens", 16000), 2000, 1000000
+        ),
+        summary_max_tokens=_clamp_int(
+            agent_ctx.get("summary_max_tokens", 1200), 200, 8000
+        ),
+    )
 
     return AgentConfig(
         llm=llm,
@@ -137,6 +193,7 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
         rag=rag,
         channels=channels,
         runtime=runtime,
+        context=context,
         proactive=proactive_raw,
         system_prompt=str(
             agent_raw.get("system_prompt", data.get("system_prompt", "You are a helpful assistant."))
@@ -148,9 +205,7 @@ def load_config(path: str | Path = "config.toml") -> AgentConfig:
             1.0,
             300.0,
         ),
-        memory_window=int(
-            agent_ctx.get("memory_window", data.get("memory_window", 40))
-        ),
+        memory_window=context.memory_window,
     )
 
 
@@ -176,6 +231,12 @@ def _parse_llm_profile(data: dict, key: str, provider: str) -> LLMProfile | None
         base_url=base_url,
         enable_thinking=bool(section.get("enable_thinking", False)),
         multimodal=bool(section.get("multimodal", False)),
+        input_price_per_million_usd=max(
+            0.0, float(section.get("input_price_per_million_usd", 0.0))
+        ),
+        output_price_per_million_usd=max(
+            0.0, float(section.get("output_price_per_million_usd", 0.0))
+        ),
     )
 
 

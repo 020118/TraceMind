@@ -9,8 +9,16 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "highlight.js": "^11.10.0",
+    "katex": "^0.16.11",
+    "lucide-react": "^0.460.0",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "react-markdown": "^9.0.1",
+    "rehype-highlight": "^7.0.1",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.0",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.1.10",

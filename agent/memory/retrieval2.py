@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Callable
 import math
 import re
 import sqlite3
@@ -74,6 +75,7 @@ class HybridMemoryRetriever:
         semantic_weight: float = 0.7,
         keyword_weight: float = 0.3,
         embedder: Embedder | None = None,
+        usage_recorder: Callable[[dict], None] | None = None,
     ) -> None:
         self._store = store
         self._model = model.strip()
@@ -84,6 +86,7 @@ class HybridMemoryRetriever:
         self._semantic_weight = float(semantic_weight) / total_weight
         self._keyword_weight = float(keyword_weight) / total_weight
         self._embedder = embedder
+        self._usage_recorder = usage_recorder
         self._client: AsyncOpenAI | None = None
         if embedder is None and api_key.strip() and self._model:
             client_options: dict[str, str] = {"api_key": api_key}
@@ -266,6 +269,15 @@ class HybridMemoryRetriever:
             model=self._model,
             input=texts,
         )
+        usage = getattr(response, "usage", None)
+        if self._usage_recorder is not None:
+            self._usage_recorder(
+                {
+                    "prompt_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
+                    "completion_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
+                    "total_tokens": getattr(usage, "total_tokens", 0) if usage else 0,
+                }
+            )
         ordered = sorted(response.data, key=lambda item: item.index)
         return [[float(value) for value in item.embedding] for item in ordered]
 

@@ -25,6 +25,13 @@ FAILED = "FAILED"
 CANCELLED = "CANCELLED"
 NEEDS_REVIEW = "NEEDS_REVIEW"
 
+TASK_RUNNING = "RUNNING"
+TASK_SUCCEEDED = "SUCCEEDED"
+TASK_FAILED = "FAILED"
+TASK_CANCELLED = "CANCELLED"
+TASK_INTERRUPTED = "INTERRUPTED"
+TASK_NEEDS_REVIEW = "NEEDS_REVIEW"
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -43,6 +50,26 @@ class OperationRecord:
     created_at: str
     updated_at: str
     expires_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TaskRunRecord:
+    """Durable trace for one passive Agent turn."""
+
+    trace_id: str
+    session_key: str
+    channel: str
+    chat_id: str
+    user_content: str
+    status: str
+    phase: str
+    iteration: int
+    checkpoint: dict[str, Any]
+    tool_chain: list[dict[str, Any]]
+    error: str
+    created_at: str
+    updated_at: str
+    completed_at: str | None
 
 
 class ReliabilityStore:
@@ -94,10 +121,158 @@ class ReliabilityStore:
 
                 CREATE INDEX IF NOT EXISTS idx_outbound_outbox_status
                 ON outbound_outbox(status, created_at);
+
+                CREATE TABLE IF NOT EXISTS task_runs (
+                    trace_id TEXT PRIMARY KEY,
+                    session_key TEXT NOT NULL,
+                    channel TEXT NOT NULL DEFAULT '',
+                    chat_id TEXT NOT NULL DEFAULT '',
+                    user_content TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    phase TEXT NOT NULL DEFAULT '',
+                    iteration INTEGER NOT NULL DEFAULT 0,
+                    checkpoint_json TEXT NOT NULL DEFAULT '{}',
+                    tool_chain_json TEXT NOT NULL DEFAULT '[]',
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_task_runs_session_updated
+                ON task_runs(session_key, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_task_runs_status
+                ON task_runs(status, updated_at);
+
+                CREATE TABLE IF NOT EXISTS model_usage (
+                    usage_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trace_id TEXT NOT NULL DEFAULT '',
+                    session_key TEXT NOT NULL DEFAULT '',
+                    model TEXT NOT NULL,
+                    purpose TEXT NOT NULL DEFAULT 'agent',
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    estimated_cost_usd REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_model_usage_created
+                ON model_usage(created_at);
+                CREATE INDEX IF NOT EXISTS idx_model_usage_model
+                ON model_usage(model, created_at);
                 """
             )
             self._ensure_operation_columns()
             self._conn.commit()
+
+    def record_model_usage(
+        self,
+        *,
+        trace_id: str,
+        session_key: str,
+        model: str,
+        purpose: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        estimated_cost_usd: float = 0.0,
+    ) -> None:
+        """Persist one model call for usage and cost reporting."""
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO model_usage (
+                    trace_id, session_key, model, purpose,
+                    prompt_tokens, completion_tokens, total_tokens,
+                    estimated_cost_usd, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(trace_id or ""),
+                    str(session_key or ""),
+                    str(model or ""),
+                    str(purpose or "agent"),
+                    max(0, int(prompt_tokens or 0)),
+                    max(0, int(completion_tokens or 0)),
+                    max(0, int(total_tokens or 0)),
+                    max(0.0, float(estimated_cost_usd or 0.0)),
+                    _now(),
+                ),
+            )
+            self._conn.commit()
+
+    def model_usage_summary(self) -> dict[str, Any]:
+        """Return aggregate model calls, token counts and estimated cost."""
+        with self._lock:
+            totals = self._conn.execute(
+                """
+                SELECT COUNT(*) AS calls,
+                       COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                       COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                       COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                       COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd
+                FROM model_usage
+                """
+            ).fetchone()
+            rows = self._conn.execute(
+                """
+                SELECT model,
+                       COUNT(*) AS calls,
+                       COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                       COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                       COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                       COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd
+                FROM model_usage
+                GROUP BY model
+                ORDER BY total_tokens DESC, model ASC
+                """
+            ).fetchall()
+            purpose_rows = self._conn.execute(
+                """
+                SELECT purpose,
+                       COUNT(*) AS calls,
+                       COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                       COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                       COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                       COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd
+                FROM model_usage
+                GROUP BY purpose
+                ORDER BY total_tokens DESC, purpose ASC
+                """
+            ).fetchall()
+
+        def _row(
+            row: Any,
+            *,
+            group_field: str | None = "model",
+        ) -> dict[str, Any]:
+            return {
+                **(
+                    {group_field: str(row[group_field])}
+                    if group_field is not None
+                    else {}
+                ),
+                "calls": int(row["calls"] or 0),
+                "prompt_tokens": int(row["prompt_tokens"] or 0),
+                "completion_tokens": int(row["completion_tokens"] or 0),
+                "total_tokens": int(row["total_tokens"] or 0),
+                "estimated_cost_usd": round(float(row["estimated_cost_usd"] or 0), 8),
+            }
+
+        return {
+            **(_row(totals, group_field=None) if totals is not None else {
+                "calls": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "estimated_cost_usd": 0.0,
+            }),
+            "by_model": [_row(row) for row in rows],
+            "by_purpose": [
+                _row(row, group_field="purpose") for row in purpose_rows
+            ],
+        }
 
     def _ensure_operation_columns(self) -> None:
         rows = self._conn.execute("PRAGMA table_info(tool_operations)").fetchall()
@@ -182,6 +357,131 @@ class ReliabilityStore:
         if record is None:  # pragma: no cover - SQLite invariant
             raise RuntimeError("创建工具操作日志失败")
         return record
+
+    def create_task_run(
+        self,
+        *,
+        session_key: str,
+        channel: str,
+        chat_id: str,
+        user_content: str,
+    ) -> TaskRunRecord:
+        """Create a durable trace before the first model call."""
+        now = _now()
+        trace_id = f"trace_{uuid.uuid4().hex}"
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO task_runs (
+                    trace_id, session_key, channel, chat_id, user_content,
+                    status, phase, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    trace_id,
+                    session_key,
+                    channel,
+                    chat_id,
+                    user_content,
+                    TASK_RUNNING,
+                    "starting",
+                    now,
+                    now,
+                ),
+            )
+            self._conn.commit()
+        record = self.get_task_run(trace_id)
+        if record is None:  # pragma: no cover - SQLite invariant
+            raise RuntimeError("创建任务追踪记录失败")
+        return record
+
+    def update_task_run(
+        self,
+        trace_id: str,
+        *,
+        status: str | None = None,
+        phase: str | None = None,
+        iteration: int | None = None,
+        checkpoint: dict[str, Any] | None = None,
+        tool_chain: list[dict[str, Any]] | None = None,
+        error: str | None = None,
+    ) -> TaskRunRecord:
+        now = _now()
+        assignments = ["updated_at = ?"]
+        params: list[Any] = [now]
+        if status is not None:
+            assignments.append("status = ?")
+            params.append(status)
+        if phase is not None:
+            assignments.append("phase = ?")
+            params.append(phase)
+        if iteration is not None:
+            assignments.append("iteration = ?")
+            params.append(max(0, int(iteration)))
+        if checkpoint is not None:
+            assignments.append("checkpoint_json = ?")
+            params.append(json.dumps(checkpoint, ensure_ascii=False, default=str))
+        if tool_chain is not None:
+            assignments.append("tool_chain_json = ?")
+            params.append(json.dumps(tool_chain, ensure_ascii=False, default=str))
+        if error is not None:
+            assignments.append("error = ?")
+            params.append(str(error)[:4000])
+        if status in {TASK_SUCCEEDED, TASK_FAILED, TASK_CANCELLED, TASK_INTERRUPTED, TASK_NEEDS_REVIEW}:
+            assignments.append("completed_at = COALESCE(completed_at, ?)")
+            params.append(now)
+        params.append(trace_id)
+        with self._lock:
+            cursor = self._conn.execute(
+                f"UPDATE task_runs SET {', '.join(assignments)} WHERE trace_id = ?",
+                tuple(params),
+            )
+            self._conn.commit()
+        if cursor.rowcount == 0:
+            raise KeyError(f"未知任务追踪: {trace_id}")
+        record = self.get_task_run(trace_id)
+        if record is None:  # pragma: no cover - SQLite invariant
+            raise RuntimeError("任务追踪状态更新失败")
+        return record
+
+    def get_task_run(self, trace_id: str) -> TaskRunRecord | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM task_runs WHERE trace_id = ?", (trace_id,)
+            ).fetchone()
+        return self._task_from_row(row) if row is not None else None
+
+    def list_task_runs(
+        self,
+        *,
+        session_key: str | None = None,
+        limit: int = 100,
+    ) -> list[TaskRunRecord]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if session_key:
+            clauses.append("session_key = ?")
+            params.append(session_key)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, min(int(limit), 500)))
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM task_runs {where} ORDER BY updated_at DESC LIMIT ?",
+                tuple(params),
+            ).fetchall()
+        return [self._task_from_row(row) for row in rows]
+
+    def list_recoverable_tasks(self) -> list[TaskRunRecord]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM task_runs
+                WHERE status = ?
+                ORDER BY created_at ASC
+                """,
+                (TASK_RUNNING,),
+            ).fetchall()
+        return [self._task_from_row(row) for row in rows]
 
     def finish_operation(
         self,
@@ -407,6 +707,9 @@ class ReliabilityStore:
             outbox_rows = self._conn.execute(
                 "SELECT status, COUNT(*) AS count FROM outbound_outbox GROUP BY status"
             ).fetchall()
+            task_rows = self._conn.execute(
+                "SELECT status, COUNT(*) AS count FROM task_runs GROUP BY status"
+            ).fetchall()
         result = {
             f"operations_{str(row['status']).lower()}": int(row["count"])
             for row in operation_rows
@@ -417,32 +720,10 @@ class ReliabilityStore:
                 for row in outbox_rows
             }
         )
-        return result
-
-    def get_outbound_status(self, outbox_id: str) -> str | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT status FROM outbound_outbox WHERE outbox_id = ?",
-                (outbox_id,),
-            ).fetchone()
-        return str(row["status"]) if row is not None else None
-
-    def stats(self) -> dict[str, int]:
-        with self._lock:
-            operation_rows = self._conn.execute(
-                "SELECT status, COUNT(*) AS count FROM tool_operations GROUP BY status"
-            ).fetchall()
-            outbox_rows = self._conn.execute(
-                "SELECT status, COUNT(*) AS count FROM outbound_outbox GROUP BY status"
-            ).fetchall()
-        result = {
-            f"operations_{str(row['status']).lower()}": int(row["count"])
-            for row in operation_rows
-        }
         result.update(
             {
-                f"outbox_{str(row['status']).lower()}": int(row["count"])
-                for row in outbox_rows
+                f"tasks_{str(row['status']).lower()}": int(row["count"])
+                for row in task_rows
             }
         )
         return result
@@ -501,6 +782,35 @@ class ReliabilityStore:
             expires_at=str(row["expires_at"]) if row["expires_at"] else None,
         )
 
+    @staticmethod
+    def _task_from_row(row: sqlite3.Row) -> TaskRunRecord:
+        try:
+            checkpoint = json.loads(str(row["checkpoint_json"] or "{}"))
+        except json.JSONDecodeError:
+            checkpoint = {}
+        try:
+            tool_chain = json.loads(str(row["tool_chain_json"] or "[]"))
+        except json.JSONDecodeError:
+            tool_chain = []
+        return TaskRunRecord(
+            trace_id=str(row["trace_id"]),
+            session_key=str(row["session_key"]),
+            channel=str(row["channel"] or ""),
+            chat_id=str(row["chat_id"] or ""),
+            user_content=str(row["user_content"] or ""),
+            status=str(row["status"]),
+            phase=str(row["phase"] or ""),
+            iteration=int(row["iteration"] or 0),
+            checkpoint=checkpoint if isinstance(checkpoint, dict) else {},
+            tool_chain=tool_chain if isinstance(tool_chain, list) else [],
+            error=str(row["error"] or ""),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+            completed_at=(
+                str(row["completed_at"]) if row["completed_at"] else None
+            ),
+        )
+
 
 __all__ = [
     "CANCELLED",
@@ -512,4 +822,11 @@ __all__ = [
     "RUNNING",
     "ReliabilityStore",
     "SUCCEEDED",
+    "TASK_CANCELLED",
+    "TASK_FAILED",
+    "TASK_INTERRUPTED",
+    "TASK_NEEDS_REVIEW",
+    "TASK_RUNNING",
+    "TASK_SUCCEEDED",
+    "TaskRunRecord",
 ]

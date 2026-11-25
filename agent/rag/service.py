@@ -8,12 +8,14 @@ import math
 import mimetypes
 import re
 import time
+from collections.abc import Callable
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
 from openai import AsyncOpenAI
 
-from agent.rag.chunking import chunk_sections, parse_document
+from agent.rag.chunking import TEXT_SUFFIXES, chunk_sections, parse_document
 from agent.rag.models import (
     ChunkRecord,
     DocumentRecord,
@@ -35,12 +37,20 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
 class OpenAIEmbeddingProvider:
     """Embedding adapter for OpenAI-compatible APIs (including DashScope)."""
 
-    def __init__(self, *, api_key: str, model: str, base_url: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        base_url: str = "",
+        usage_recorder: Callable[[dict], None] | None = None,
+    ) -> None:
         options: dict[str, str] = {"api_key": api_key}
         if base_url.strip():
             options["base_url"] = base_url.strip()
         self._client = AsyncOpenAI(**options)
         self.model_name = model.strip()
+        self._usage_recorder = usage_recorder
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
@@ -49,6 +59,15 @@ class OpenAIEmbeddingProvider:
                 model=self.model_name,
                 input=texts[start : start + 64],
             )
+            usage = getattr(response, "usage", None)
+            if self._usage_recorder is not None:
+                self._usage_recorder(
+                    {
+                        "prompt_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
+                        "completion_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
+                        "total_tokens": getattr(usage, "total_tokens", 0) if usage else 0,
+                    }
+                )
             ordered = sorted(response.data, key=lambda item: item.index)
             vectors.extend(
                 [[float(value) for value in item.embedding] for item in ordered]
@@ -82,6 +101,12 @@ class RAGService:
         chunk_overlap: int = 150,
         top_k: int = 6,
         rrf_k: int = 60,
+        diversify_results: bool = True,
+        max_results_per_document: int = 3,
+        mmr_lambda: float = 0.75,
+        mmr_min_relevance: float = 0.65,
+        search_cache_size: int = 128,
+        search_cache_ttl_seconds: float = 60.0,
     ) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
         self.store = store
@@ -94,6 +119,21 @@ class RAGService:
         self.chunk_overlap = max(0, min(int(chunk_overlap), self.chunk_size // 2))
         self.top_k = max(1, min(int(top_k), 20))
         self.rrf_k = max(1, int(rrf_k))
+        self.diversify_results = bool(diversify_results)
+        self.max_results_per_document = max(
+            0, min(int(max_results_per_document), 20)
+        )
+        self.mmr_lambda = max(0.0, min(float(mmr_lambda), 1.0))
+        self.mmr_min_relevance = max(
+            0.0, min(float(mmr_min_relevance), 1.0)
+        )
+        self.search_cache_size = max(0, min(int(search_cache_size), 10_000))
+        self.search_cache_ttl_seconds = max(0.0, float(search_cache_ttl_seconds))
+        self._search_cache: OrderedDict[
+            tuple[str, int, bool, int], tuple[float, tuple[SearchHit, ...]]
+        ] = OrderedDict()
+        self._search_cache_hits = 0
+        self._search_cache_misses = 0
 
     async def initialize(self) -> None:
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -124,6 +164,8 @@ class RAGService:
                 chunks = self.store.get_chunks_for_document(document_id)
                 vector_synced = await self._sync_vector_store(existing, chunks)
                 existing = self.store.get_document(document_id) or existing
+                if vector_synced:
+                    self._invalidate_search_cache()
             return IngestResult(
                 document_id=document_id,
                 source_path=relative_path,
@@ -181,6 +223,9 @@ class RAGService:
             chunk_count=len(chunks),
         )
         self.store.replace_document(document, chunks)
+        # A changed document can alter both keyword and dense rankings. Do not
+        # serve a cached answer that was computed against the previous index.
+        self._invalidate_search_cache()
         vector_synced = await self._sync_vector_store(document, chunks)
         if self.vector_store is None:
             self.store.update_vector_status(document.id, "LOCAL_ONLY")
@@ -194,14 +239,107 @@ class RAGService:
             vector_status=stored_document.vector_status,
         )
 
-    async def search(self, query: str, *, top_k: int | None = None) -> list[SearchHit]:
-        query = (query or "").strip()
+    async def ingest_directory(
+        self,
+        path: str = ".",
+        *,
+        recursive: bool = True,
+        max_files: int = 100,
+    ) -> dict[str, object]:
+        """Incrementally index supported files under a workspace directory.
+
+        Files are processed one by one so a single malformed document does not
+        abort the rest of a batch. Existing content hashes keep unchanged files
+        idempotent, while changed files are re-chunked and re-indexed.
+        """
+        root = self._resolve_workspace_path(path)
+        if not root.is_dir():
+            raise NotADirectoryError(f"知识库目录不存在: {path}")
+        max_files = max(1, min(int(max_files), 1_000))
+        iterator = root.rglob("*") if recursive else root.iterdir()
+        all_files = sorted(
+            (candidate for candidate in iterator if candidate.is_file()),
+            key=lambda candidate: candidate.as_posix().lower(),
+        )
+        supported = [
+            candidate
+            for candidate in all_files
+            if (
+                candidate.suffix.lower() in TEXT_SUFFIXES
+                or candidate.suffix.lower() == ".pdf"
+            )
+        ]
+        selected = supported[:max_files]
+        documents: list[dict[str, object]] = []
+        indexed = 0
+        unchanged = 0
+        failed = 0
+        for source in selected:
+            relative = source.relative_to(self.workspace).as_posix()
+            try:
+                result = await self.ingest_file(relative)
+                if result.unchanged:
+                    unchanged += 1
+                    state = "unchanged"
+                else:
+                    indexed += 1
+                    state = "indexed"
+                documents.append(
+                    {
+                        "path": relative,
+                        "status": state,
+                        "chunk_count": result.chunk_count,
+                        "vector_status": result.vector_status,
+                    }
+                )
+            except Exception as exc:
+                failed += 1
+                documents.append(
+                    {"path": relative, "status": "failed", "error": str(exc)[:500]}
+                )
+        return {
+            "root": root.relative_to(self.workspace).as_posix() or ".",
+            "recursive": recursive,
+            "scanned_files": len(all_files),
+            "supported_files": len(supported),
+            "selected_files": len(selected),
+            "unsupported_files": len(all_files) - len(supported),
+            "skipped_files": len(supported) - len(selected),
+            "indexed": indexed,
+            "unchanged": unchanged,
+            "failed": failed,
+            "documents": documents,
+        }
+
+    async def search(
+        self,
+        query: str,
+        *,
+        top_k: int | None = None,
+        diversify: bool | None = None,
+        max_per_document: int | None = None,
+    ) -> list[SearchHit]:
+        query = _normalize_query(query)
         if not query:
             return []
+        limit = max(1, min(int(top_k or self.top_k), 20))
+        use_diversity = (
+            self.diversify_results if diversify is None else bool(diversify)
+        )
+        document_cap = (
+            self.max_results_per_document
+            if max_per_document is None
+            else max(0, min(int(max_per_document), 20))
+        )
+        cached = self._get_cached_search(query, limit, use_diversity, document_cap)
+        if cached is not None:
+            return list(cached)
+        self._search_cache_misses += 1
+
         records = self.store.list_chunks()
         if not records:
+            self._cache_search(query, limit, use_diversity, document_cap, [])
             return []
-        limit = max(1, min(int(top_k or self.top_k), 20))
         candidate_limit = min(len(records), max(limit * 4, 20))
         candidates = {
             chunk.id: RankedCandidate(chunk=chunk, document=document)
@@ -311,7 +449,15 @@ class RAGService:
             {"keyword": keyword_ranking, "semantic": semantic_ranking},
             k=self.rrf_k,
         )
-        return [
+        selected = _select_diverse_candidates(
+            fused,
+            limit,
+            diversify=use_diversity,
+            max_per_document=document_cap,
+            mmr_lambda=self.mmr_lambda,
+            min_relevance=self.mmr_min_relevance,
+        )
+        hits = [
             SearchHit(
                 chunk=candidate.chunk,
                 document=candidate.document,
@@ -319,11 +465,31 @@ class RAGService:
                 semantic_score=round(candidate.semantic_score, 6),
                 keyword_score=round(candidate.keyword_score, 6),
             )
-            for candidate, score in fused[:limit]
+            for candidate, score in selected
         ]
+        self._cache_search(query, limit, use_diversity, document_cap, hits)
+        return hits
 
     def list_documents(self) -> list[DocumentRecord]:
         return self.store.list_documents()
+
+    def delete_document(self, document_id: str) -> bool:
+        document = self.store.get_document(document_id)
+        if document is None:
+            return False
+        deleted = self.store.delete_document(document_id)
+        if deleted:
+            self._invalidate_search_cache()
+            if self.vector_store is not None and self.vector_store.available:
+                # The HTTP endpoint is synchronous from the caller's perspective;
+                # vector cleanup is best-effort and local SQLite remains source of truth.
+                import asyncio
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.vector_store.delete_document(document_id))
+                except RuntimeError:
+                    pass
+        return deleted
 
     def retrieval_metrics(self, limit: int = 500) -> dict:
         summary = self.store.retrieval_metrics_summary(limit)
@@ -342,17 +508,76 @@ class RAGService:
                 "metric_definition": {
                     "recall_at_k": "Qdrant Top-K 与 SQLite 精确 Dense Top-K 的重合比例",
                     "speedup": "SQLite 精确扫描平均延迟 / Qdrant 平均延迟",
+                    "diversity": "RRF 后使用 MMR 惩罚相似片段，并限制单篇文档占比",
+                },
+                "retrieval_quality": {
+                    "diversify_results": self.diversify_results,
+                    "max_results_per_document": self.max_results_per_document,
+                    "mmr_lambda": self.mmr_lambda,
+                    "mmr_min_relevance": self.mmr_min_relevance,
+                },
+                "search_cache": {
+                    "enabled": self.search_cache_size > 0
+                    and self.search_cache_ttl_seconds > 0,
+                    "size": self.search_cache_size,
+                    "ttl_seconds": self.search_cache_ttl_seconds,
+                    "entries": len(self._search_cache),
+                    "hits": self._search_cache_hits,
+                    "misses": self._search_cache_misses,
+                    "hit_rate": _hit_rate(
+                        self._search_cache_hits, self._search_cache_misses
+                    ),
                 },
             }
         )
         return summary
 
     async def close(self) -> None:
+        self._invalidate_search_cache()
         if self.vector_store is not None:
             await self.vector_store.close()
         if self.embedder is not None:
             await self.embedder.close()
         self.store.close()
+
+    def _get_cached_search(
+        self, query: str, limit: int, diversify: bool, max_per_document: int
+    ) -> tuple[SearchHit, ...] | None:
+        if self.search_cache_size <= 0 or self.search_cache_ttl_seconds <= 0:
+            return None
+        key = (query, limit, diversify, max_per_document)
+        entry = self._search_cache.get(key)
+        if entry is None:
+            return None
+        expires_at, hits = entry
+        if expires_at <= time.monotonic():
+            self._search_cache.pop(key, None)
+            return None
+        self._search_cache.move_to_end(key)
+        self._search_cache_hits += 1
+        return hits
+
+    def _cache_search(
+        self,
+        query: str,
+        limit: int,
+        diversify: bool,
+        max_per_document: int,
+        hits: list[SearchHit],
+    ) -> None:
+        if self.search_cache_size <= 0 or self.search_cache_ttl_seconds <= 0:
+            return
+        key = (query, limit, diversify, max_per_document)
+        self._search_cache[key] = (
+            time.monotonic() + self.search_cache_ttl_seconds,
+            tuple(hits),
+        )
+        self._search_cache.move_to_end(key)
+        while len(self._search_cache) > self.search_cache_size:
+            self._search_cache.popitem(last=False)
+
+    def _invalidate_search_cache(self) -> None:
+        self._search_cache.clear()
 
     async def _sync_pending_documents(self) -> None:
         for document in self.store.list_documents_for_vector_sync():
@@ -420,6 +645,12 @@ def create_rag_service(
     chunk_overlap: int = 150,
     top_k: int = 6,
     rrf_k: int = 60,
+    diversify_results: bool = True,
+    max_results_per_document: int = 3,
+    mmr_lambda: float = 0.75,
+    mmr_min_relevance: float = 0.65,
+    search_cache_size: int = 128,
+    search_cache_ttl_seconds: float = 60.0,
     vector_store_config: dict[str, object] | None = None,
 ) -> RAGService:
     embedding_config = embedding_config or {}
@@ -431,6 +662,7 @@ def create_rag_service(
             api_key=api_key,
             model=model,
             base_url=embedding_config.get("base_url", ""),
+            usage_recorder=embedding_config.get("usage_recorder"),
         )
     vector_store_config = vector_store_config or {}
     vector_store: VectorStore | None = None
@@ -459,6 +691,12 @@ def create_rag_service(
         chunk_overlap=chunk_overlap,
         top_k=top_k,
         rrf_k=rrf_k,
+        diversify_results=diversify_results,
+        max_results_per_document=max_results_per_document,
+        mmr_lambda=mmr_lambda,
+        mmr_min_relevance=mmr_min_relevance,
+        search_cache_size=search_cache_size,
+        search_cache_ttl_seconds=search_cache_ttl_seconds,
     )
     return service
 
@@ -482,6 +720,116 @@ def _tokens(text: str) -> set[str]:
         else:
             tokens.update(run[index : index + 2] for index in range(len(run) - 1))
     return tokens
+
+
+def _normalize_query(query: str) -> str:
+    """Collapse insignificant whitespace so equivalent queries share a cache key."""
+    return " ".join((query or "").split())
+
+
+def _select_diverse_candidates(
+    ranking: list[tuple[RankedCandidate, float]],
+    limit: int,
+    *,
+    diversify: bool,
+    max_per_document: int,
+    mmr_lambda: float,
+    min_relevance: float,
+) -> list[tuple[RankedCandidate, float]]:
+    """Apply deterministic MMR after RRF without requiring another model call."""
+    if not ranking or not diversify:
+        return ranking[:limit]
+
+    pool = ranking[: max(limit * 4, 20)]
+    if max_per_document == 0 or len(pool) <= limit:
+        # With no cap there is no reason to reorder a smaller result set.
+        if max_per_document == 0:
+            return pool[:limit]
+
+    quality_scores = {
+        candidate.chunk.id: max(candidate.keyword_score, candidate.semantic_score)
+        for candidate, _ in pool
+    }
+    best_quality = max(quality_scores.values(), default=0.0) or 1.0
+    best_score = max(score for _, score in pool) or 1.0
+    relevance_pool = [
+        item
+        for item in pool
+        if quality_scores[item[0].chunk.id] / best_quality >= min_relevance
+    ]
+    # Keep enough candidates for the requested top-k. Weak candidates are only
+    # used as a final recall-preserving fallback after strong candidates run out.
+    fallback_pool = [item for item in pool if item not in relevance_pool]
+    selected: list[tuple[RankedCandidate, float]] = []
+    selected_ids: set[str] = set()
+    document_counts: dict[str, int] = {}
+    remaining = list(enumerate(relevance_pool))
+    while remaining and len(selected) < limit:
+        best_position = -1
+        best_value: tuple[float, float, float] | None = None
+        for position, (original_rank, (candidate, score)) in enumerate(remaining):
+            if candidate.chunk.id in selected_ids:
+                continue
+            document_id = candidate.document.id
+            if (
+                max_per_document > 0
+                and document_counts.get(document_id, 0) >= max_per_document
+            ):
+                continue
+            relevance = score / best_score
+            redundancy = max(
+                (
+                    _candidate_similarity(candidate, selected_candidate)
+                    for selected_candidate, _ in selected
+                ),
+                default=0.0,
+            )
+            mmr_score = mmr_lambda * relevance - (1.0 - mmr_lambda) * redundancy
+            value = (mmr_score, score, -float(original_rank))
+            if best_value is None or value > best_value:
+                best_value = value
+                best_position = position
+        if best_position < 0:
+            # The document cap is a diversity preference, not a hard recall
+            # limit. If the corpus has too few distinct documents, relax it
+            # and fill the requested top-k rather than returning too few hits.
+            if max_per_document > 0:
+                max_per_document = 0
+                continue
+            break
+        _, chosen = remaining.pop(best_position)
+        selected.append(chosen)
+        selected_ids.add(chosen[0].chunk.id)
+        document_id = chosen[0].document.id
+        document_counts[document_id] = document_counts.get(document_id, 0) + 1
+    if len(selected) < limit:
+        selected_ids.update(item[0].chunk.id for item in selected)
+        selected.extend(
+            item
+            for item in fallback_pool
+            if item[0].chunk.id not in selected_ids
+        )
+        selected = selected[:limit]
+    return selected
+
+
+def _candidate_similarity(left: RankedCandidate, right: RankedCandidate) -> float:
+    left_embedding = left.chunk.embedding
+    right_embedding = right.chunk.embedding
+    if left_embedding and right_embedding and len(left_embedding) == len(right_embedding):
+        return max(
+            0.0,
+            min(1.0, _cosine_similarity(list(left_embedding), right_embedding)),
+        )
+    left_tokens = _tokens(f"{left.chunk.heading} {left.chunk.text}")
+    right_tokens = _tokens(f"{right.chunk.heading} {right.chunk.text}")
+    union = left_tokens | right_tokens
+    return len(left_tokens & right_tokens) / len(union) if union else 0.0
+
+
+def _hit_rate(hits: int, misses: int) -> float | None:
+    total = hits + misses
+    return round(hits / total, 4) if total else None
 
 
 def _keyword_similarity(query: str, candidate: str) -> float:
