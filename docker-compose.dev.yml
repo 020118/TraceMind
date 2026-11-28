@@ -5,6 +5,12 @@ services:
       - "6333:6333"
     volumes:
       - qdrant_dev_storage:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
   tracemind:
     build:
@@ -25,7 +31,8 @@ services:
       - ./knowledge_docs:/home/agent/.akashic/workspace/knowledge_docs:ro
     command: ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     depends_on:
-      - qdrant
+      qdrant:
+        condition: service_healthy
 
 volumes:
   agent_dev_workspace:

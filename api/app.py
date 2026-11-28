@@ -21,6 +21,13 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from agent.runtime import AgentRuntime
+from api.governance import (
+    SlidingWindowRateLimiter,
+    cleanup_expired_attachments,
+    evaluate_daily_budget,
+    parse_float_env,
+    parse_int_env,
+)
 from agent.reliability.journal import (
     PENDING_CONFIRMATION,
     TASK_CANCELLED,
@@ -224,6 +231,9 @@ def create_app(
         )
         app.state.runtime = runtime
         await runtime.start()
+        workspace = getattr(runtime, "workspace", None)
+        if workspace is not None:
+            cleanup_expired_attachments(Path(workspace))
         try:
             yield
         finally:
@@ -251,12 +261,29 @@ def create_app(
         allow_headers=["Content-Type", "X-API-Key"],
     )
 
+    rate_limiter = SlidingWindowRateLimiter(
+        max_requests=parse_int_env("AGENT_RATE_LIMIT_RPM", 60),
+        window_seconds=60.0,
+    )
+
     async def verify_api_key(x_api_key: str = Header(default="")) -> None:
         expected = os.environ.get("AGENT_API_KEY", "").strip()
         if expected and not secrets.compare_digest(x_api_key, expected):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid API key",
+            )
+
+    async def enforce_rate_limit(request: Request) -> None:
+        client_host = request.client.host if request.client else "unknown"
+        api_key_hdr = request.headers.get("X-API-Key", "")
+        key = f"{client_host}:{api_key_hdr[:8]}"
+        allowed, retry_after = rate_limiter.check(key)
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"请求过于频繁，请在 {retry_after} 秒后重试。",
+                headers={"Retry-After": str(retry_after)},
             )
 
     @application.get("/health", response_model=HealthResponse, tags=["system"])
@@ -276,7 +303,11 @@ def create_app(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Usage store is unavailable",
             )
-        return store.model_usage_summary()
+        summary = store.model_usage_summary()
+        if hasattr(store, "today_cost_usd"):
+            summary["today_cost_usd"] = store.today_cost_usd()
+        summary["daily_budget_usd"] = parse_float_env("AGENT_DAILY_BUDGET_USD", 0.0)
+        return summary
 
     @application.get("/ready", tags=["system"])
     async def ready(request: Request) -> dict[str, Any]:
@@ -481,7 +512,7 @@ def create_app(
         "/v1/chat",
         response_model=ChatResponse,
         tags=["chat"],
-        dependencies=[Depends(verify_api_key)],
+        dependencies=[Depends(verify_api_key), Depends(enforce_rate_limit)],
     )
     async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         runtime = request.app.state.runtime
@@ -489,6 +520,16 @@ def create_app(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Agent runtime is not ready",
+            )
+
+        effective_mode, should_block, today_cost, budget_limit = evaluate_daily_budget(
+            _reliability_store(runtime),
+            requested_mode=payload.mode,
+        )
+        if should_block:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"今日模型费用已达预算上限（${today_cost:.4f} / ${budget_limit:.4f}）。",
             )
 
         started = time.perf_counter()
@@ -499,8 +540,8 @@ def create_app(
                 "content": payload.message,
                 "timeout": payload.timeout_seconds,
             }
-            if payload.mode != "balanced":
-                request_kwargs["mode"] = payload.mode
+            if effective_mode != "balanced":
+                request_kwargs["mode"] = effective_mode
             if payload.media:
                 request_kwargs["media"] = list(payload.media)
             request_id, outbound = await runtime.api_channel.request(**request_kwargs)
@@ -796,7 +837,7 @@ def create_app(
     @application.post(
         "/v1/chat/stream",
         tags=["chat"],
-        dependencies=[Depends(verify_api_key)],
+        dependencies=[Depends(verify_api_key), Depends(enforce_rate_limit)],
     )
     async def chat_stream(payload: ChatRequest, request: Request) -> StreamingResponse:
         """Stream observable Agent events and model answer deltas as NDJSON."""
@@ -806,6 +847,16 @@ def create_app(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Agent runtime is not ready",
+            )
+
+        effective_mode, should_block, today_cost, budget_limit = evaluate_daily_budget(
+            _reliability_store(runtime),
+            requested_mode=payload.mode,
+        )
+        if should_block:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"今日模型费用已达预算上限（${today_cost:.4f} / ${budget_limit:.4f}）。",
             )
 
         started = time.perf_counter()
@@ -818,8 +869,8 @@ def create_app(
                     "content": payload.message,
                     "timeout": payload.timeout_seconds,
                 }
-                if payload.mode != "balanced":
-                    stream_kwargs["mode"] = payload.mode
+                if effective_mode != "balanced":
+                    stream_kwargs["mode"] = effective_mode
                 if payload.media:
                     stream_kwargs["media"] = list(payload.media)
                 async for request_id, event in runtime.api_channel.request_stream(**stream_kwargs):
