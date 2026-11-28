@@ -312,11 +312,15 @@ export function decideOperation(
   apiKey: string
 ): Promise<ChatResponse> {
   return request<ChatResponse>(
-    `/v1/operations/${encodeURIComponent(operationId)}/${decision}`,
+    `/v1/operations/${encodeURIComponent(operationId)}/decide`,
     apiKey,
     {
       method: "POST",
-      body: JSON.stringify({ session_id: sessionId, timeout_seconds: 120 })
+      body: JSON.stringify({
+        decision,
+        session_id: sessionId,
+        timeout_seconds: 120
+      })
     }
   );
 }

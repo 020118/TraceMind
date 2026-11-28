@@ -42,11 +42,16 @@ class PendingConfirmation(BaseModel):
     status: str
     created_at: str
     expires_at: str | None = None
+    spec: dict[str, Any] = Field(default_factory=dict)
 
 
 class OperationDecisionRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
     timeout_seconds: float = Field(default=120.0, ge=1.0, le=300.0)
+
+
+class OperationDecideRequest(OperationDecisionRequest):
+    decision: str = Field(pattern="^(confirm|cancel)$")
 
 
 class ChatAttachment(BaseModel):

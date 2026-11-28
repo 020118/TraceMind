@@ -21,6 +21,7 @@ import {
 } from "./api";
 import { Composer } from "./components/Composer";
 import { KnowledgeModal } from "./components/KnowledgeModal";
+import { ApprovalModal } from "./components/ApprovalModal";
 import { MessageItem } from "./components/MessageItem";
 import { SettingsModal } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
@@ -558,9 +559,13 @@ export default function App() {
     const active = pending;
     setBusyBySession((prev) => ({ ...prev, [sessionId]: true }));
     setError("");
+    const label =
+      decision === "confirm"
+        ? active.spec?.confirm_label || "确认执行"
+        : active.spec?.cancel_label || "取消操作";
     updateSessionMessages(sessionId, (list) => [
       ...list,
-      toMessage("user", decision === "confirm" ? "确认删除" : "取消删除")
+      toMessage("user", label)
     ]);
     try {
       const response = await decideOperation(
@@ -865,59 +870,11 @@ export default function App() {
         onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
       />
 
-      {pending && (
-        <div className="modal-backdrop" role="presentation">
-          <section
-            className="confirm-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="confirm-title"
-          >
-            <div className="warning-icon">!</div>
-            <span className="eyebrow danger">DESTRUCTIVE OPERATION</span>
-            <h2 id="confirm-title">确认执行高危操作？</h2>
-            <p>Agent 已暂停执行。只有你明确确认后，该操作才会继续执行。</p>
-            <dl>
-              <div>
-                <dt>目标路径</dt>
-                <dd>{String(pending.arguments.path || "未知路径")}</dd>
-              </div>
-              <div>
-                <dt>工具</dt>
-                <dd>{pending.tool_name}</dd>
-              </div>
-              <div>
-                <dt>操作编号</dt>
-                <dd><code>{pending.operation_id}</code></dd>
-              </div>
-              {pending.expires_at && (
-                <div>
-                  <dt>确认有效期</dt>
-                  <dd>{new Date(pending.expires_at).toLocaleString("zh-CN")}</dd>
-                </div>
-              )}
-            </dl>
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="cancel-button"
-                onClick={() => void handleDecision("cancel")}
-                disabled={busy}
-              >
-                取消操作
-              </button>
-              <button
-                type="button"
-                className="danger-button"
-                onClick={() => void handleDecision("confirm")}
-                disabled={busy}
-              >
-                {busy ? "正在执行…" : "确认执行"}
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
+      <ApprovalModal
+        pending={pending}
+        busy={busy}
+        onDecide={(decision) => void handleDecision(decision)}
+      />
     </div>
   );
 }

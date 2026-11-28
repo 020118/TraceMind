@@ -5,10 +5,32 @@ from __future__ import annotations
 import logging
 import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ConfirmationSpec:
+    """工具自描述的通用审批卡片契约。"""
+
+    title: str
+    summary: str
+    severity: str = "warning"  # "info" | "warning" | "danger"
+    confirm_label: str = "确认执行"
+    cancel_label: str = "取消操作"
+    details: list[dict[str, str]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "title": self.title,
+            "summary": self.summary,
+            "severity": self.severity,
+            "confirm_label": self.confirm_label,
+            "cancel_label": self.cancel_label,
+            "details": list(self.details),
+        }
 
 
 @dataclass(frozen=True)
@@ -68,6 +90,31 @@ class BaseTool(ABC):
         如果执行失败，应抛出异常，框架会自动捕获并告知 LLM。
         """
         ...
+
+    def describe_confirmation(
+        self,
+        arguments: dict[str, Any],
+        *,
+        reason: str = "",
+    ) -> ConfirmationSpec:
+        """返回通用审批卡片描述；需要定制展示的工具可覆写此方法。"""
+        details = [
+            {"label": str(k), "value": str(v)[:300]}
+            for k, v in (arguments or {}).items()
+            if not str(k).startswith("_")
+        ]
+        summary = (
+            reason
+            or f"工具 {self.name} 需要你的明确确认后才会执行。"
+        )
+        return ConfirmationSpec(
+            title=f"确认执行 {self.name}？",
+            summary=summary,
+            severity="warning",
+            confirm_label="确认执行",
+            cancel_label="取消操作",
+            details=details,
+        )
 
     # ── 格式转换 ─────────────────────────────────────
 

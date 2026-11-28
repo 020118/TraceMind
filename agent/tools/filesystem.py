@@ -19,7 +19,7 @@ from agent.host_tools.filesystem import (
     ReadFileTool as HostReadFileTool,
     WriteFileTool as HostWriteFileTool,
 )
-from agent.tools.base import BaseTool, ToolRegistry
+from agent.tools.base import BaseTool, ConfirmationSpec, ToolRegistry
 
 
 def _result_to_text(result: str | HostToolResult) -> str:
@@ -86,6 +86,24 @@ class DeleteFileTool(_FilesystemToolAdapter):
 
     def __init__(self, allowed_dir: Path) -> None:
         super().__init__(HostDeleteFileTool(allowed_dir=allowed_dir))
+
+    def describe_confirmation(
+        self,
+        arguments: dict[str, Any],
+        *,
+        reason: str = "",
+    ) -> ConfirmationSpec:
+        return ConfirmationSpec(
+            title="确认删除文件？",
+            summary=reason or "Agent 已暂停执行。只有你明确确认后，文件才会被移动到项目回收目录。",
+            severity="danger",
+            confirm_label="确认删除",
+            cancel_label="取消删除",
+            details=[
+                {"label": "目标路径", "value": str(arguments.get("path", "未知路径"))},
+                {"label": "工具", "value": self.name},
+            ],
+        )
 
 
 def register_filesystem_tools(registry: ToolRegistry, workspace: Path) -> None:

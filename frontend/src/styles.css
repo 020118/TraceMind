@@ -1683,8 +1683,44 @@ button {
   font: 700 19px "Cascadia Code", Consolas, monospace;
 }
 
+.warning-icon.severity-warning {
+  background: rgba(217, 119, 6, 0.14);
+  color: #b45309;
+}
+
+:root[data-theme="dark"] .warning-icon.severity-warning {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+}
+
+.warning-icon.severity-info {
+  background: rgba(20, 61, 45, 0.12);
+  color: var(--forest);
+}
+
+:root[data-theme="dark"] .warning-icon.severity-info {
+  background: rgba(201, 240, 90, 0.14);
+  color: var(--lime);
+}
+
 .eyebrow.danger {
   color: var(--danger);
+}
+
+.eyebrow.warning {
+  color: #b45309;
+}
+
+:root[data-theme="dark"] .eyebrow.warning {
+  color: #fbbf24;
+}
+
+.eyebrow.info {
+  color: var(--forest);
+}
+
+:root[data-theme="dark"] .eyebrow.info {
+  color: var(--lime);
 }
 
 .confirm-modal h2 {
@@ -1754,6 +1790,24 @@ button {
   border: 1px solid var(--danger);
   background: var(--danger);
   color: #fff;
+}
+
+.warning-button {
+  border: 1px solid #b45309;
+  background: #b45309;
+  color: #fff;
+}
+
+.primary-button {
+  border: 1px solid var(--forest);
+  background: var(--forest);
+  color: #fff;
+}
+
+:root[data-theme="dark"] .primary-button {
+  border-color: var(--lime);
+  background: var(--lime);
+  color: #101d16;
 }
 
 /* ── Responsive / Mobile Drawer ──────────────────────────────── */
