@@ -516,7 +516,7 @@ button {
 
 .panel-heading {
   min-height: 62px;
-  padding: 10px 24px;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 24px 10px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1229,7 +1229,7 @@ button {
 /* ── Composer ────────────────────────────────────────────────── */
 
 .composer-wrap {
-  padding: 8px clamp(16px, 5vw, 64px) 18px;
+  padding: 8px clamp(16px, 5vw, 64px) calc(18px + env(safe-area-inset-bottom, 0px));
   background: linear-gradient(transparent, var(--paper) 20%);
 }
 
@@ -1683,8 +1683,32 @@ button {
   font: 700 19px "Cascadia Code", Consolas, monospace;
 }
 
+.approval-icon {
+  width: 42px;
+  height: 42px;
+  margin-bottom: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: var(--forest-soft);
+  color: var(--forest);
+  font: 700 19px "Cascadia Code", Consolas, monospace;
+}
+
+:root[data-theme="dark"] .approval-icon {
+  color: var(--lime);
+}
+
 .eyebrow.danger {
   color: var(--danger);
+}
+
+.eyebrow.approval {
+  color: var(--forest);
+}
+
+:root[data-theme="dark"] .eyebrow.approval {
+  color: var(--lime);
 }
 
 .confirm-modal h2 {
@@ -1753,6 +1777,12 @@ button {
 .danger-button {
   border: 1px solid var(--danger);
   background: var(--danger);
+  color: #fff;
+}
+
+.approve-button {
+  border: 1px solid var(--forest);
+  background: var(--forest);
   color: #fff;
 }
 

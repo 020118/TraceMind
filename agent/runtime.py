@@ -35,7 +35,9 @@ from agent.security import redact_secrets
 from agent.tools.amap import register_all_amap_tools as register_amap_direct
 from agent.tools.base import BaseTool, ToolRegistry
 from agent.tools.code_execution import register_code_execution_tools
+from agent.tools.code_review import register_code_review_tool
 from agent.tools.filesystem import register_filesystem_tools
+from agent.tools.git_tools import register_git_tools
 from agent.tools.mcp_client import register_mcp_server
 from agent.tools.mcp_stdio_client import register_mcp_stdio
 from agent.tools.knowledge import register_knowledge_tools
@@ -81,6 +83,7 @@ def setup_tools(
             workspace,
             tool_timeout_seconds=tool_timeout_seconds,
         )
+        register_git_tools(registry, workspace)
     registry.register(
         ToolSearchTool(registry),
         always_on=True,
@@ -218,6 +221,12 @@ class AgentRuntime:
             )
             self.session_manager = SessionManager(self.workspace)
             loop_provider = LLMProvider(self.llm)
+            register_code_review_tool(
+                self.tools,
+                self.workspace,
+                loop_provider,
+                model=main_cfg.model,
+            )
             light_provider = self._build_light_provider(loop_provider)
             vl_provider = self._build_vl_provider()
             vl_cfg = self.config.llm.vl
@@ -285,6 +294,7 @@ class AgentRuntime:
                     memory_service=self.memory_service,
                     model=main_cfg.model,
                     max_tokens=self.config.max_tokens,
+                    passive_busy_fn=self.agent_loop.is_session_busy,
                 )
 
             handlers: dict[str, SendFn] = {"api": self.api_channel.send}

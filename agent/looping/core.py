@@ -133,6 +133,14 @@ class AgentLoop:
     def active_turn_states(self) -> dict[str, TurnInterruptState]:
         return self._active_turn_states
 
+    def is_session_busy(self, session_key: str) -> bool:
+        """Return True when the passive loop currently has an active turn for session_key."""
+        task = self._active_tasks.get(session_key)
+        if task is not None and not task.done():
+            return True
+        lock = self._session_locks.get(session_key)
+        return bool(lock is not None and lock.locked())
+
     @staticmethod
     async def _emit_stream_event(
         inbound: InboundMessage,
@@ -827,6 +835,13 @@ class AgentLoop:
                 tool_name=name,
                 arguments=dict(arguments),
             )
+            if name == "git_commit_and_push":
+                commit_msg = str(arguments.get("commit_message", ""))
+                return (
+                    f"工具 '{name}' 尚未执行。即将把当前功能分支提交并推送到远程仓库，提交说明为 {commit_msg!r}。"
+                    f"操作编号为 {pending.operation_id[:12]}。"
+                    "请等待用户在界面点击确认或明确回复‘确认执行’后再提交推送；如果用户取消则不要执行。"
+                )
             path = str(arguments.get("path", ""))
             return (
                 f"工具 '{name}' 尚未执行。这是有破坏性的文件操作，目标是 {path!r}。"
@@ -870,11 +885,18 @@ class AgentLoop:
 
         decision = self._parse_confirmation(message.content)
         if decision is None:
-            reply = (
-                f"当前仍有待确认的操作：{pending.tool_name} "
-                f"({pending.arguments.get('path', '')})。"
-                "请明确回复‘确认删除’或‘取消删除’。"
-            )
+            if pending.tool_name == "git_commit_and_push":
+                reply = (
+                    f"当前仍有待确认的代码交付操作：{pending.tool_name} "
+                    f"({pending.arguments.get('commit_message', '')})。"
+                    "请明确回复‘确认执行’或‘取消操作’。"
+                )
+            else:
+                reply = (
+                    f"当前仍有待确认的操作：{pending.tool_name} "
+                    f"({pending.arguments.get('path', '')})。"
+                    "请明确回复‘确认删除’或‘取消删除’。"
+                )
             return await self._finish_confirmation_turn(
                 message,
                 reply,
@@ -884,13 +906,22 @@ class AgentLoop:
             )
 
         if decision == "cancel":
+            cancel_reason = (
+                "用户取消代码交付操作"
+                if pending.tool_name == "git_commit_and_push"
+                else "用户取消删除"
+            )
             self.reliability.transition_operation(
                 pending.operation_id,
                 to_status=CANCELLED,
                 allowed_from={PENDING_CONFIRMATION},
-                result="用户取消删除",
+                result=cancel_reason,
             )
-            reply = "已取消删除操作，文件没有被修改。"
+            reply = (
+                "已取消代码提交与推送操作。"
+                if pending.tool_name == "git_commit_and_push"
+                else "已取消删除操作，文件没有被修改。"
+            )
             return await self._finish_confirmation_turn(
                 message,
                 reply,
@@ -1081,11 +1112,26 @@ class AgentLoop:
         normalized = "".join(str(content).strip().lower().split())
         if not normalized:
             return None
-        if any(token in normalized for token in ("取消删除", "不要删除", "拒绝删除", "cancel", "no")):
+        if any(
+            token in normalized
+            for token in ("取消删除", "不要删除", "拒绝删除", "取消操作", "取消交付", "cancel", "no")
+        ):
             return "cancel"
         if normalized in {"确认", "确定", "是", "yes", "y", "confirm"}:
             return "confirm"
-        if any(token in normalized for token in ("确认删除", "同意删除", "确认执行删除", "confirmdelete")):
+        if any(
+            token in normalized
+            for token in (
+                "确认删除",
+                "同意删除",
+                "确认执行删除",
+                "confirmdelete",
+                "确认执行",
+                "确认提交",
+                "确认推送",
+                "确认交付",
+            )
+        ):
             return "confirm"
         return None
 

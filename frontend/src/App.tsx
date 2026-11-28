@@ -6,6 +6,7 @@ import {
   decideOperation,
   deleteKnowledge,
   deleteSession,
+  getApiBaseUrl,
   getHistory,
   getUsage,
   interruptSession,
@@ -14,6 +15,7 @@ import {
   patchSession,
   resumeTask,
   searchSessions,
+  setApiBaseUrl,
   streamChat,
   truncateSession,
   uploadChatAttachment,
@@ -90,6 +92,7 @@ function toMessage(
 export default function App() {
   const [sessionId, setSessionId] = useState(initialSessionId);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [apiBaseUrl, setApiBaseUrlState] = useState(getApiBaseUrl);
   const [apiKey, setApiKey] = useState(
     () =>
       sessionStorage.getItem(API_KEY_STORAGE_KEY) ||
@@ -558,9 +561,17 @@ export default function App() {
     const active = pending;
     setBusyBySession((prev) => ({ ...prev, [sessionId]: true }));
     setError("");
+    const userLabel =
+      active.tool_name === "git_commit_and_push"
+        ? decision === "confirm"
+          ? "确认提交并推送"
+          : "取消交付"
+        : decision === "confirm"
+          ? "确认删除"
+          : "取消删除";
     updateSessionMessages(sessionId, (list) => [
       ...list,
-      toMessage("user", decision === "confirm" ? "确认删除" : "取消删除")
+      toMessage("user", userLabel)
     ]);
     try {
       const response = await decideOperation(
@@ -855,11 +866,18 @@ export default function App() {
 
       <SettingsModal
         open={settingsModalOpen}
+        apiBaseUrl={apiBaseUrl}
         apiKey={apiKey}
         serviceStatus={serviceStatus}
         usage={usage}
         theme={theme}
         onClose={() => setSettingsModalOpen(false)}
+        onApiBaseUrlChange={setApiBaseUrlState}
+        onApiBaseUrlCommit={() => {
+          const clean = setApiBaseUrl(apiBaseUrl);
+          setApiBaseUrlState(clean);
+          setHistoryVersion((v) => v + 1);
+        }}
         onApiKeyChange={setApiKey}
         onApiKeyCommit={() => setHistoryVersion((v) => v + 1)}
         onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
@@ -873,48 +891,101 @@ export default function App() {
             aria-modal="true"
             aria-labelledby="confirm-title"
           >
-            <div className="warning-icon">!</div>
-            <span className="eyebrow danger">DESTRUCTIVE OPERATION</span>
-            <h2 id="confirm-title">确认执行高危操作？</h2>
-            <p>Agent 已暂停执行。只有你明确确认后，该操作才会继续执行。</p>
-            <dl>
-              <div>
-                <dt>目标路径</dt>
-                <dd>{String(pending.arguments.path || "未知路径")}</dd>
-              </div>
-              <div>
-                <dt>工具</dt>
-                <dd>{pending.tool_name}</dd>
-              </div>
-              <div>
-                <dt>操作编号</dt>
-                <dd><code>{pending.operation_id}</code></dd>
-              </div>
-              {pending.expires_at && (
-                <div>
-                  <dt>确认有效期</dt>
-                  <dd>{new Date(pending.expires_at).toLocaleString("zh-CN")}</dd>
+            {pending.tool_name === "git_commit_and_push" ? (
+              <>
+                <div className="approval-icon">✓</div>
+                <span className="eyebrow approval">CODE DELIVERY APPROVAL</span>
+                <h2 id="confirm-title">确认提交并推送代码？</h2>
+                <p>
+                  Agent 已完成修改、测试与独立 AI Review，正等待你确认后将功能分支推送到远程仓库。
+                </p>
+                <dl>
+                  <div>
+                    <dt>提交说明</dt>
+                    <dd>{String(pending.arguments.commit_message || "未填写")}</dd>
+                  </div>
+                  <div>
+                    <dt>测试摘要</dt>
+                    <dd>{String(pending.arguments.test_summary || "已通过")}</dd>
+                  </div>
+                  <div>
+                    <dt>Review 结论</dt>
+                    <dd>{String(pending.arguments.review_summary || "已通过")}</dd>
+                  </div>
+                  <div>
+                    <dt>自动提 PR</dt>
+                    <dd>{pending.arguments.create_pr ? "是（推送后尝试创建 PR）" : "否（仅推送功能分支）"}</dd>
+                  </div>
+                  <div>
+                    <dt>操作编号</dt>
+                    <dd><code>{pending.operation_id}</code></dd>
+                  </div>
+                </dl>
+                <div className="modal-actions">
+                  <button
+                    type="button"
+                    className="cancel-button"
+                    onClick={() => void handleDecision("cancel")}
+                    disabled={busy}
+                  >
+                    取消交付
+                  </button>
+                  <button
+                    type="button"
+                    className="approve-button"
+                    onClick={() => void handleDecision("confirm")}
+                    disabled={busy}
+                  >
+                    {busy ? "正在提交推送…" : "确认提交并推送"}
+                  </button>
                 </div>
-              )}
-            </dl>
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="cancel-button"
-                onClick={() => void handleDecision("cancel")}
-                disabled={busy}
-              >
-                取消操作
-              </button>
-              <button
-                type="button"
-                className="danger-button"
-                onClick={() => void handleDecision("confirm")}
-                disabled={busy}
-              >
-                {busy ? "正在执行…" : "确认执行"}
-              </button>
-            </div>
+              </>
+            ) : (
+              <>
+                <div className="warning-icon">!</div>
+                <span className="eyebrow danger">DESTRUCTIVE OPERATION</span>
+                <h2 id="confirm-title">确认执行高危操作？</h2>
+                <p>Agent 已暂停执行。只有你明确确认后，该操作才会继续执行。</p>
+                <dl>
+                  <div>
+                    <dt>目标路径</dt>
+                    <dd>{String(pending.arguments.path || "未知路径")}</dd>
+                  </div>
+                  <div>
+                    <dt>工具</dt>
+                    <dd>{pending.tool_name}</dd>
+                  </div>
+                  <div>
+                    <dt>操作编号</dt>
+                    <dd><code>{pending.operation_id}</code></dd>
+                  </div>
+                  {pending.expires_at && (
+                    <div>
+                      <dt>确认有效期</dt>
+                      <dd>{new Date(pending.expires_at).toLocaleString("zh-CN")}</dd>
+                    </div>
+                  )}
+                </dl>
+                <div className="modal-actions">
+                  <button
+                    type="button"
+                    className="cancel-button"
+                    onClick={() => void handleDecision("cancel")}
+                    disabled={busy}
+                  >
+                    取消操作
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={() => void handleDecision("confirm")}
+                    disabled={busy}
+                  >
+                    {busy ? "正在执行…" : "确认执行"}
+                  </button>
+                </div>
+              </>
+            )}
           </section>
         </div>
       )}

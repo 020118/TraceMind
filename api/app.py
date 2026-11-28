@@ -239,7 +239,7 @@ def create_app(
         item.strip()
         for item in os.environ.get(
             "AGENT_CORS_ORIGINS",
-            "http://localhost:5173,http://127.0.0.1:5173",
+            "http://localhost:5173,http://127.0.0.1:5173,http://localhost,https://localhost,capacitor://localhost",
         ).split(",")
         if item.strip()
     ]
@@ -902,7 +902,10 @@ def create_app(
             )
 
         started = time.perf_counter()
-        content = "确认删除" if decision == "confirm" else "取消删除"
+        if operation.tool_name == "delete_file":
+            content = "确认删除" if decision == "confirm" else "取消删除"
+        else:
+            content = "确认执行" if decision == "confirm" else "取消操作"
         try:
             request_id, outbound = await runtime.api_channel.request(
                 session_id=payload.session_id,

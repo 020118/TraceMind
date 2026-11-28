@@ -15,14 +15,41 @@ import type {
   UsageSummary
 } from "./types";
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+const ENV_API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+export const API_BASE_STORAGE_KEY = "tracemind.api-base-url";
+
+export function getApiBaseUrl(): string {
+  try {
+    const saved = localStorage.getItem(API_BASE_STORAGE_KEY);
+    if (saved !== null) {
+      return saved.trim().replace(/\/$/, "");
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return ENV_API_BASE;
+}
+
+export function setApiBaseUrl(value: string): string {
+  const clean = value.trim().replace(/\/$/, "");
+  try {
+    if (clean) {
+      localStorage.setItem(API_BASE_STORAGE_KEY, clean);
+    } else {
+      localStorage.removeItem(API_BASE_STORAGE_KEY);
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return clean;
+}
 
 export function resolveAssetUrl(url: string): string {
   if (!url) return "";
   if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:")) {
     return url;
   }
-  return `${API_BASE}${url}`;
+  return `${getApiBaseUrl()}${url}`;
 }
 
 export class ApiError extends Error {
@@ -39,7 +66,7 @@ async function request<T>(
   apiKey: string,
   init?: RequestInit
 ): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -92,7 +119,7 @@ export async function* streamChat(
   signal?: AbortSignal,
   media: string[] = []
 ): AsyncGenerator<ChatStreamEvent> {
-  const response = await fetch(`${API_BASE}/v1/chat/stream`, {
+  const response = await fetch(`${getApiBaseUrl()}/v1/chat/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -158,7 +185,7 @@ export async function uploadChatAttachment(
   const form = new FormData();
   form.append("file", file);
   form.append("session_id", sessionId || "default");
-  const response = await fetch(`${API_BASE}/v1/chat/attachments`, {
+  const response = await fetch(`${getApiBaseUrl()}/v1/chat/attachments`, {
     method: "POST",
     headers: apiKey ? { "X-API-Key": apiKey } : {},
     body: form
@@ -222,7 +249,7 @@ export async function uploadKnowledge(file: File, apiKey: string): Promise<Knowl
   const form = new FormData();
   form.append("file", file);
   form.append("index", "true");
-  const response = await fetch(`${API_BASE}/v1/knowledge/upload`, {
+  const response = await fetch(`${getApiBaseUrl()}/v1/knowledge/upload`, {
     method: "POST",
     headers: apiKey ? { "X-API-Key": apiKey } : {},
     body: form
