@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Menu, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Download, Menu, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import {
   ApiError,
   createSession,
@@ -21,6 +21,7 @@ import {
 } from "./api";
 import { Composer } from "./components/Composer";
 import { KnowledgeModal } from "./components/KnowledgeModal";
+import { CanvasDrawer, type CanvasArtifact } from "./components/CanvasDrawer";
 import { MessageItem } from "./components/MessageItem";
 import { SettingsModal } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
@@ -115,6 +116,7 @@ export default function App() {
   const [knowledge, setKnowledge] = useState<KnowledgeDocument[]>([]);
   const [knowledgeModalOpen, setKnowledgeModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [canvasArtifact, setCanvasArtifact] = useState<CanvasArtifact | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearch = useDebouncedValue(searchQuery, 250);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -722,6 +724,30 @@ export default function App() {
   const activeSession = sidebarSessions.find((s) => s.session_id === sessionId);
   const lastAssistantId = [...messages].reverse().find((m) => m.role === "assistant")?.id;
 
+  function handleExportMarkdown() {
+    if (messages.length === 0) return;
+    const title = activeSession?.title || "TraceMind 对话记录";
+    const lines = [
+      `# ${title}`,
+      "",
+      `> 导出时间：${new Date().toLocaleString("zh-CN")}`,
+      ""
+    ];
+    for (const msg of messages) {
+      const who = msg.role === "user" ? "你" : "TraceMind";
+      const ts = msg.timestamp ? ` (${new Date(msg.timestamp).toLocaleString("zh-CN")})` : "";
+      lines.push(`## ${who}${ts}`, "", msg.content || "", "");
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const safeName = title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 40) || "tracemind-chat";
+    a.href = url;
+    a.download = `${safeName}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="app-shell">
       <main className={`workspace ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}`}>
@@ -771,6 +797,17 @@ export default function App() {
               </div>
             </div>
             <div className="heading-meta">
+              {messages.length > 0 && (
+                <button
+                  type="button"
+                  className="export-btn"
+                  onClick={handleExportMarkdown}
+                  title="导出对话为 Markdown"
+                >
+                  <Download size={13} />
+                  <span>导出</span>
+                </button>
+              )}
               <span className="message-count">{messages.length} 条消息</span>
               <div className={`service-pill ${serviceStatus}`}>
                 <i />
@@ -803,6 +840,7 @@ export default function App() {
                     canRegenerate={message.id === lastAssistantId}
                     onEditResend={(m, next) => void handleEditResend(m, next)}
                     onRegenerate={(m) => void handleRegenerate(m)}
+                    onPreviewArtifact={(lang, code) => setCanvasArtifact({ lang, code })}
                   />
                 ))}
               </div>
@@ -842,6 +880,12 @@ export default function App() {
             </div>
           </div>
         </section>
+        {canvasArtifact && (
+          <CanvasDrawer
+            artifact={canvasArtifact}
+            onClose={() => setCanvasArtifact(null)}
+          />
+        )}
       </main>
 
       <KnowledgeModal

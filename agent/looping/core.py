@@ -444,7 +444,79 @@ class AgentLoop:
             )
         if self._summary_service is not None:
             self._summary_service.schedule(message.session_key)
+        self._maybe_schedule_auto_title(session, message.content, reply)
         return outbound
+
+    def _maybe_schedule_auto_title(
+        self,
+        session: Any,
+        user_content: str,
+        reply: str,
+    ) -> None:
+        """Schedule background LLM title generation after the first turn."""
+        if self.light_provider is None:
+            return
+        if not user_content or not reply:
+            return
+        if len(getattr(session, "messages", []) or []) > 2:
+            return
+        if str((getattr(session, "metadata", None) or {}).get("title", "")).strip():
+            return
+        try:
+            task = asyncio.create_task(
+                self._generate_session_title(session.key, user_content, reply)
+            )
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+        except RuntimeError:
+            pass
+
+    async def _generate_session_title(
+        self,
+        session_key: str,
+        user_content: str,
+        reply: str,
+    ) -> str | None:
+        """Generate a concise session title and persist it if not manually set."""
+        provider = self.light_provider or self.provider
+        if provider is None:
+            return None
+        model = getattr(self._llm_config, "light_model", None) or self._llm_config.model
+        prompt = (
+            "请为以下对话生成一个极简标题（不超过16个字，与用户语言一致，"
+            "不要加引号、书名号、句号或 Markdown 符号，只输出标题本身）：\n"
+            f"用户：{user_content[:300]}\n"
+            f"助手：{reply[:300]}"
+        )
+        try:
+            response = await asyncio.wait_for(
+                provider.chat(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=model,
+                    max_tokens=40,
+                    temperature=0.2,
+                ),
+                timeout=12.0,
+            )
+        except Exception:
+            logger.debug("Auto-title generation failed for %s", session_key, exc_info=True)
+            return None
+
+        raw = str(getattr(response, "content", "") or "").strip()
+        if not raw:
+            return None
+        first_line = raw.splitlines()[0].strip()
+        clean = first_line.strip(" \t\r\n\"'“”‘’《》【】#*-。，.!?:：")
+        clean = " ".join(clean.split())[:24]
+        if not clean:
+            return None
+
+        # Re-check metadata so we never overwrite a manual rename made in the meantime.
+        current = self.session_manager.get_or_create(session_key)
+        if str((current.metadata or {}).get("title", "")).strip():
+            return None
+        if hasattr(self.session_manager, "update_session_metadata"):
+            self.session_manager.update_session_metadata(session_key, title=clean)
+        return clean
 
     async def _run_reasoning(
         self,

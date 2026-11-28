@@ -22,6 +22,7 @@ interface MessageItemProps {
   canRegenerate: boolean;
   onEditResend: (message: ChatMessage, nextContent: string) => void;
   onRegenerate: (message: ChatMessage) => void;
+  onPreviewArtifact?: (lang: string, code: string) => void;
 }
 
 export function MessageItem({
@@ -30,7 +31,8 @@ export function MessageItem({
   busy,
   canRegenerate,
   onEditResend,
-  onRegenerate
+  onRegenerate,
+  onPreviewArtifact
 }: MessageItemProps) {
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -137,7 +139,7 @@ export function MessageItem({
           <div className="message-bubble user-bubble">{message.content}</div>
         ) : message.content ? (
           <div className="message-bubble assistant-bubble">
-            <MarkdownRenderer content={message.content} />
+            <MarkdownRenderer content={message.content} onPreview={onPreviewArtifact} />
           </div>
         ) : (
           <div className="thinking-row">
