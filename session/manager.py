@@ -604,7 +604,7 @@ class SessionManager:
                     "pinned": bool(metadata.get("pinned", False)),
                 }
             )
-        result.sort(key=lambda item: (not item["pinned"],))
+        result.sort(key=lambda item: (not item["pinned"], item["message_count"] == 0))
         return result
 
     def search_messages(

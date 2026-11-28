@@ -3,11 +3,14 @@ import type { UsageSummary } from "../types";
 
 interface SettingsModalProps {
   open: boolean;
+  apiBaseUrl: string;
   apiKey: string;
   serviceStatus: "checking" | "ready" | "offline";
   usage: UsageSummary | null;
   theme: "light" | "dark";
   onClose: () => void;
+  onApiBaseUrlChange: (value: string) => void;
+  onApiBaseUrlCommit: () => void;
   onApiKeyChange: (value: string) => void;
   onApiKeyCommit: () => void;
   onToggleTheme: () => void;
@@ -15,11 +18,14 @@ interface SettingsModalProps {
 
 export function SettingsModal({
   open,
+  apiBaseUrl,
   apiKey,
   serviceStatus,
   usage,
   theme,
   onClose,
+  onApiBaseUrlChange,
+  onApiBaseUrlCommit,
   onApiKeyChange,
   onApiKeyCommit,
   onToggleTheme
@@ -46,6 +52,21 @@ export function SettingsModal({
         </div>
 
         <div className="settings-group">
+          <label className="settings-field">
+            <span>后端服务器地址（Web 端留空；手机 App 填 Tailscale 地址，如 http://100.x.x.x:8000）</span>
+            <input
+              type="url"
+              value={apiBaseUrl}
+              onChange={(event) => onApiBaseUrlChange(event.target.value)}
+              onBlur={onApiBaseUrlCommit}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+              }}
+              placeholder="例如 http://100.88.12.34:8000（网页版留空）"
+              autoComplete="off"
+            />
+          </label>
+
           <label className="settings-field">
             <span>API Key（可选，留空表示未启用鉴权）</span>
             <input

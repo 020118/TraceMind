@@ -19,7 +19,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN python -m pip install --no-cache-dir -r requirements.txt \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --no-cache-dir -r requirements.txt \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin agent
 
 COPY --chown=agent:agent . .

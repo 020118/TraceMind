@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -196,6 +197,7 @@ def build_proactive_loop(
     memory_service: MemoryServiceV2 | None = None,
     model: str = "",
     max_tokens: int = 1024,
+    passive_busy_fn: Callable[[str], bool] | None = None,
 ) -> ProactiveLoop | None:
     """按 config.toml 的 [proactive] 节装配 ProactiveLoop；未启用时返回 None。"""
     if not config_raw or not bool(config_raw.get("enabled", False)):
@@ -224,6 +226,7 @@ def build_proactive_loop(
         state_path=workspace / "proactive.db",
         memory_store=memory_runtime if memory_runtime.available else None,
         presence=presence,
+        passive_busy_fn=passive_busy_fn,
         shared_tools=SharedToolsAdapter(shared_registry),
         event_bus=event_bus,
     )

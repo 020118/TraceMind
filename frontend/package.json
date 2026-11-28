@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.3",
+    "@capacitor/core": "^8.6.3",
     "highlight.js": "^11.10.0",
     "katex": "^0.16.11",
     "lucide-react": "^0.460.0",
@@ -21,6 +23,7 @@
     "remark-math": "^6.0.0"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.6.3",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^5.0.4",

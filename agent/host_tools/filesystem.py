@@ -33,7 +33,8 @@ def _resolve_path(path: str, allowed_dir: Path | None = None) -> Path:
     - 若提供了 allowed_dir，相对路径基于 allowed_dir 解析（工作目录为 allowed_dir）
     - 否则相对路径基于进程 cwd 解析
     """
-    p = Path(path).expanduser()
+    normalized_path = path.replace("\\", "/") if os.name != "nt" and "\\" in path else path
+    p = Path(normalized_path).expanduser()
     if not p.is_absolute() and allowed_dir is not None:
         resolved = (allowed_dir / p).resolve()
     else:
