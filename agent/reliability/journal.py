@@ -11,7 +11,7 @@ import json
 import sqlite3
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
@@ -50,6 +50,7 @@ class OperationRecord:
     created_at: str
     updated_at: str
     expires_at: str | None
+    spec: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,6 +286,10 @@ class ReliabilityStore:
             self._conn.execute(
                 "ALTER TABLE tool_operations ADD COLUMN chat_id TEXT NOT NULL DEFAULT ''"
             )
+        if "spec_json" not in existing:
+            self._conn.execute(
+                "ALTER TABLE tool_operations ADD COLUMN spec_json TEXT NOT NULL DEFAULT '{}'"
+            )
 
     def __del__(self) -> None:
         if not getattr(self, "_closed", True):
@@ -308,12 +313,14 @@ class ReliabilityStore:
         chat_id: str = "",
         tool_name: str,
         arguments: dict[str, Any],
+        spec: dict[str, Any] | None = None,
         expires_in: timedelta = timedelta(minutes=30),
     ) -> OperationRecord:
         now = _now()
         expires_at = (datetime.now(UTC) + expires_in).isoformat()
         operation_id = uuid.uuid4().hex
         payload = json.dumps(arguments, ensure_ascii=False, sort_keys=True)
+        spec_payload = json.dumps(spec or {}, ensure_ascii=False, sort_keys=True)
         with self._lock:
             # A session may have only one live confirmation.  Replacing it is
             # explicit and durable rather than silently overwriting a dict.
@@ -335,9 +342,9 @@ class ReliabilityStore:
                 """
                 INSERT INTO tool_operations (
                     operation_id, session_key, channel, chat_id,
-                    tool_name, arguments_json,
+                    tool_name, arguments_json, spec_json,
                     status, created_at, updated_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     operation_id,
@@ -346,6 +353,7 @@ class ReliabilityStore:
                     chat_id,
                     tool_name,
                     payload,
+                    spec_payload,
                     PENDING_CONFIRMATION,
                     now,
                     now,
@@ -767,6 +775,11 @@ class ReliabilityStore:
 
     @staticmethod
     def _operation_from_row(row: sqlite3.Row) -> OperationRecord:
+        raw_spec = row["spec_json"] if "spec_json" in row.keys() else "{}"
+        try:
+            spec = json.loads(str(raw_spec or "{}"))
+        except json.JSONDecodeError:
+            spec = {}
         return OperationRecord(
             operation_id=str(row["operation_id"]),
             session_key=str(row["session_key"]),
@@ -780,6 +793,7 @@ class ReliabilityStore:
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
             expires_at=str(row["expires_at"]) if row["expires_at"] else None,
+            spec=spec if isinstance(spec, dict) else {},
         )
 
     @staticmethod

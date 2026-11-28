@@ -33,6 +33,7 @@ from api.models import (
     ChatRequest,
     ChatResponse,
     HealthResponse,
+    OperationDecideRequest,
     OperationDecisionRequest,
     PendingConfirmation,
     SessionCreateResponse,
@@ -98,6 +99,7 @@ def _pending_for_session(runtime: Any, session_id: str) -> PendingConfirmation |
         status=record.status,
         created_at=record.created_at,
         expires_at=record.expires_at,
+        spec=dict(getattr(record, "spec", None) or {}),
     )
 
 
@@ -902,7 +904,10 @@ def create_app(
             )
 
         started = time.perf_counter()
-        content = "确认删除" if decision == "confirm" else "取消删除"
+        if operation.tool_name == "delete_file":
+            content = "确认删除" if decision == "confirm" else "取消删除"
+        else:
+            content = "确认执行" if decision == "confirm" else "取消操作"
         try:
             request_id, outbound = await runtime.api_channel.request(
                 session_id=payload.session_id,
@@ -951,6 +956,21 @@ def create_app(
     ) -> ChatResponse:
         return await decide_operation(
             operation_id, payload, request, decision="cancel"
+        )
+
+    @application.post(
+        "/v1/operations/{operation_id}/decide",
+        response_model=ChatResponse,
+        tags=["operations"],
+        dependencies=[Depends(verify_api_key)],
+    )
+    async def decide_operation_endpoint(
+        operation_id: str,
+        payload: OperationDecideRequest,
+        request: Request,
+    ) -> ChatResponse:
+        return await decide_operation(
+            operation_id, payload, request, decision=payload.decision
         )
 
     @application.get(

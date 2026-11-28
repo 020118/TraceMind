@@ -16,6 +16,20 @@ export interface ChatAttachment {
   url: string;
 }
 
+export interface ConfirmationDetail {
+  label: string;
+  value: string;
+}
+
+export interface ConfirmationSpec {
+  title?: string;
+  summary?: string;
+  severity?: "info" | "warning" | "danger";
+  confirm_label?: string;
+  cancel_label?: string;
+  details?: ConfirmationDetail[];
+}
+
 export interface PendingConfirmation {
   operation_id: string;
   tool_name: string;
@@ -23,6 +37,7 @@ export interface PendingConfirmation {
   status: string;
   created_at: string;
   expires_at: string | null;
+  spec?: ConfirmationSpec;
 }
 
 export interface ChatResponse {

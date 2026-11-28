@@ -480,6 +480,7 @@ class AgentLoop:
         reasoning_chunks: list[str] = []
         last_call_sig: str | None = None
         repeat_call_count = 0
+        tainted_by_untrusted = False
 
         for iteration in range(iteration_limit):
             self._checkpoint_task(
@@ -670,18 +671,21 @@ class AgentLoop:
                 tool_chain=tool_chain,
             )
 
-            async def execute_call(call: Any) -> tuple[str, int, str]:
+            async def execute_call(call: Any) -> tuple[str, int, str, bool]:
                 started = time.perf_counter()
+                needs_confirm = self._tool_requires_confirmation(
+                    call.name, taint_escalated=tainted_by_untrusted
+                )
                 result = await self._execute_tool(
-                        call.name,
-                        call.arguments,
-                        session_key=message.session_key,
-                        channel=message.channel,
-                        chat_id=message.chat_id,
-                    )
+                    call.name,
+                    call.arguments,
+                    session_key=message.session_key,
+                    channel=message.channel,
+                    chat_id=message.chat_id,
+                    taint_escalated=tainted_by_untrusted,
+                )
                 elapsed_ms = int((time.perf_counter() - started) * 1000)
-                metadata = self.tools.get_metadata(call.name)
-                if metadata is not None and metadata.requires_confirmation:
+                if needs_confirm:
                     status = "awaiting_confirmation"
                 elif "执行超时" in result:
                     status = "timeout"
@@ -692,7 +696,7 @@ class AgentLoop:
                     status = "failed"
                 else:
                     status = "succeeded"
-                return result, elapsed_ms, status
+                return result, elapsed_ms, status, needs_confirm
 
             results = await asyncio.gather(
                 *(execute_call(call) for call in response.tool_calls)
@@ -701,7 +705,9 @@ class AgentLoop:
             chain_calls: list[dict[str, Any]] = []
             confirmation_reply: str | None = None
             for call, execution in zip(response.tool_calls, results, strict=True):
-                result, elapsed_ms, execution_status = execution
+                result, elapsed_ms, execution_status, needs_confirm = execution
+                if call.name in {"web_fetch", "web_search"} or call.name.startswith("mcp_"):
+                    tainted_by_untrusted = True
                 safe_result = redact_secrets(result)
                 bounded_result = _truncate_tool_result(safe_result)
                 prompt_tool_content = wrap_untrusted_tool_output(
@@ -716,9 +722,8 @@ class AgentLoop:
                         "content": prompt_tool_content,
                     }
                 )
-                metadata = self.tools.get_metadata(call.name)
                 operation_id = ""
-                if metadata is not None and metadata.requires_confirmation:
+                if needs_confirm:
                     pending = self.reliability.get_pending_operation(
                         message.session_key
                     )
@@ -747,7 +752,7 @@ class AgentLoop:
                     operation_id=operation_id,
                     iteration=iteration + 1,
                 )
-                if metadata is not None and metadata.requires_confirmation:
+                if needs_confirm:
                     confirmation_reply = safe_result
                 if call.name == "tool_search" and deferred:
                     query = str(call.arguments.get("query", ""))
@@ -797,6 +802,18 @@ class AgentLoop:
             reasoning_content="\n\n".join(reasoning_chunks),
         )
 
+    def _tool_requires_confirmation(
+        self, name: str, *, taint_escalated: bool = False
+    ) -> bool:
+        metadata = self.tools.get_metadata(name)
+        if metadata is None:
+            return False
+        if metadata.requires_confirmation:
+            return True
+        if taint_escalated and metadata.risk in {"write", "external-side-effect", "destructive"}:
+            return True
+        return False
+
     async def _execute_tool(
         self,
         name: str,
@@ -807,6 +824,7 @@ class AgentLoop:
         chat_id: str = "",
         bypass_confirmation: bool = False,
         operation_id: str = "",
+        taint_escalated: bool = False,
     ) -> str:
         tool = self.tools.get(name)
         if tool is None:
@@ -817,21 +835,37 @@ class AgentLoop:
         if schema_error is not None:
             return schema_error
         metadata = self.tools.get_metadata(name)
-        if metadata is not None and metadata.requires_confirmation and not bypass_confirmation:
+        needs_confirm = self._tool_requires_confirmation(
+            name, taint_escalated=taint_escalated
+        )
+        if needs_confirm and not bypass_confirmation:
             if not session_key:
                 return f"工具 '{name}' 需要用户明确确认，当前没有可用会话。"
+            escalated_reason = (
+                "本轮已读取外部不可信内容（如网页/外部数据源），为防间接提示词注入，系统已自动将该写入/副作用操作升级为人工审批。"
+                if taint_escalated and not (metadata and metadata.requires_confirmation)
+                else ""
+            )
+            spec = tool.describe_confirmation(arguments, reason=escalated_reason).to_dict()
             pending = self.reliability.create_pending_operation(
                 session_key=session_key,
                 channel=channel,
                 chat_id=chat_id,
                 tool_name=name,
                 arguments=dict(arguments),
+                spec=spec,
             )
-            path = str(arguments.get("path", ""))
+            if name == "delete_file":
+                path = str(arguments.get("path", ""))
+                return (
+                    f"工具 '{name}' 尚未执行。这是有破坏性的文件操作，目标是 {path!r}。"
+                    f"操作编号为 {pending.operation_id[:12]}。"
+                    "请等待用户明确回复‘确认删除’后再执行；如果用户拒绝则不要执行。"
+                )
             return (
-                f"工具 '{name}' 尚未执行。这是有破坏性的文件操作，目标是 {path!r}。"
-                f"操作编号为 {pending.operation_id[:12]}。"
-                "请等待用户明确回复‘确认删除’后再执行；如果用户拒绝则不要执行。"
+                f"工具 '{name}' 尚未执行（{spec.get('title', '等待审批')}）。"
+                f"{spec.get('summary', '')} 操作编号为 {pending.operation_id[:12]}。"
+                "请等待用户在界面点击确认或明确回复‘确认执行’后再执行；如果用户取消则不要执行。"
             )
         try:
             tool_arguments = dict(arguments)
@@ -869,11 +903,24 @@ class AgentLoop:
             return None
 
         decision = self._parse_confirmation(message.content)
+        spec = pending.spec if isinstance(pending.spec, dict) else {}
+        confirm_label = str(
+            spec.get("confirm_label")
+            or ("确认删除" if pending.tool_name == "delete_file" else "确认执行")
+        )
+        cancel_label = str(
+            spec.get("cancel_label")
+            or ("取消删除" if pending.tool_name == "delete_file" else "取消操作")
+        )
         if decision is None:
+            target = (
+                pending.arguments.get("path")
+                or spec.get("title")
+                or pending.tool_name
+            )
             reply = (
-                f"当前仍有待确认的操作：{pending.tool_name} "
-                f"({pending.arguments.get('path', '')})。"
-                "请明确回复‘确认删除’或‘取消删除’。"
+                f"当前仍有待确认的操作：{pending.tool_name} ({target})。"
+                f"请明确回复‘{confirm_label}’或‘{cancel_label}’。"
             )
             return await self._finish_confirmation_turn(
                 message,
@@ -884,13 +931,22 @@ class AgentLoop:
             )
 
         if decision == "cancel":
+            cancel_result = (
+                "用户取消删除"
+                if pending.tool_name == "delete_file"
+                else f"用户取消操作：{pending.tool_name}"
+            )
             self.reliability.transition_operation(
                 pending.operation_id,
                 to_status=CANCELLED,
                 allowed_from={PENDING_CONFIRMATION},
-                result="用户取消删除",
+                result=cancel_result,
             )
-            reply = "已取消删除操作，文件没有被修改。"
+            reply = (
+                "已取消删除操作，文件没有被修改。"
+                if pending.tool_name == "delete_file"
+                else f"已取消操作（{spec.get('title') or pending.tool_name}），未产生副作用。"
+            )
             return await self._finish_confirmation_turn(
                 message,
                 reply,
@@ -908,7 +964,7 @@ class AgentLoop:
                                 "operation_id": pending.operation_id,
                             }
                         ],
-                        "text": "用户取消破坏性操作",
+                        "text": "用户取消待审批操作",
                     }
                 ],
                 dispatch_outbound=dispatch_outbound,
@@ -939,7 +995,7 @@ class AgentLoop:
                             "operation_id": pending.operation_id,
                         }
                     ],
-                    "text": "用户确认后执行破坏性操作",
+                    "text": "用户确认后执行审批操作",
                 }
             ],
             dispatch_outbound=dispatch_outbound,
@@ -1081,11 +1137,11 @@ class AgentLoop:
         normalized = "".join(str(content).strip().lower().split())
         if not normalized:
             return None
-        if any(token in normalized for token in ("取消删除", "不要删除", "拒绝删除", "cancel", "no")):
+        if any(token in normalized for token in ("取消删除", "不要删除", "拒绝删除", "取消操作", "cancel", "no")):
             return "cancel"
         if normalized in {"确认", "确定", "是", "yes", "y", "confirm"}:
             return "confirm"
-        if any(token in normalized for token in ("确认删除", "同意删除", "确认执行删除", "confirmdelete")):
+        if any(token in normalized for token in ("确认删除", "同意删除", "确认执行删除", "confirmdelete", "确认执行")):
             return "confirm"
         return None
 
