@@ -274,6 +274,20 @@ class ReliabilityStore:
             ],
         }
 
+    def today_cost_usd(self) -> float:
+        """Return total estimated LLM cost (USD) recorded since UTC midnight."""
+        day_prefix = datetime.now(UTC).strftime("%Y-%m-%d")
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT COALESCE(SUM(estimated_cost_usd), 0.0) AS total
+                FROM model_usage
+                WHERE created_at >= ?
+                """,
+                (day_prefix,),
+            ).fetchone()
+        return round(float(row["total"] or 0.0), 8) if row is not None else 0.0
+
     def _ensure_operation_columns(self) -> None:
         rows = self._conn.execute("PRAGMA table_info(tool_operations)").fetchall()
         existing = {str(row["name"]) for row in rows}
