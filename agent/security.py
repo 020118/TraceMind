@@ -87,6 +87,9 @@ _BLOCKED_HOSTNAMES = frozenset(
 
 def _is_forbidden_ip(ip_str: str) -> bool:
     ip = ipaddress.ip_address(ip_str)
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        if _is_forbidden_ip(str(ip.ipv4_mapped)):
+            return True
     return bool(
         ip.is_private
         or ip.is_loopback
@@ -195,9 +198,16 @@ def wrap_untrusted_tool_output(tool_name: str, text: str) -> str:
     if not text:
         return text
     if tool_name in _UNTRUSTED_TOOL_NAMES or tool_name.startswith("mcp_"):
+        # Neutralize closing-tag breakout attempts inside untrusted text.
+        safe_text = re.sub(
+            r"</\s*untrusted_tool_output\s*>",
+            r"<\/untrusted_tool_output>",
+            text,
+            flags=re.IGNORECASE,
+        )
         return (
             f'<untrusted_tool_output source="{tool_name}">\n'
-            f"{text}\n"
+            f"{safe_text}\n"
             f"</untrusted_tool_output>"
         )
     return text
