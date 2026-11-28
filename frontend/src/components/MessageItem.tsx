@@ -4,6 +4,7 @@ import { resolveAssetUrl } from "../api";
 import type { ChatMessage } from "../types";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ThinkingBlock } from "./ThinkingBlock";
+import { CitationBar } from "./CitationBar";
 
 function timeLabel(value: string): string {
   if (!value) return "";
@@ -152,6 +153,10 @@ export function MessageItem({
             <i />
             {message.streamStatus}
           </div>
+        )}
+
+        {message.role === "assistant" && !isStreaming && message.trace.length > 0 && (
+          <CitationBar trace={message.trace} />
         )}
 
         {!editing && !isStreaming && message.content && (
