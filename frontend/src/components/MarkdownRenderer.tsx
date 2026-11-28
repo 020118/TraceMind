@@ -4,7 +4,9 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Eye } from "lucide-react";
+
+const PREVIEWABLE_LANGS = new Set(["html", "htm", "svg"]);
 
 function extractText(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
@@ -17,15 +19,18 @@ function extractText(node: ReactNode): string {
 
 function CodeBlock({
   className,
-  children
+  children,
+  onPreview
 }: {
   className?: string;
   children?: ReactNode;
+  onPreview?: (lang: string, code: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const match = /language-([\w-]+)/.exec(className || "");
   const lang = match?.[1] || "code";
   const rawCode = extractText(children).replace(/\n$/, "");
+  const canPreview = Boolean(onPreview && PREVIEWABLE_LANGS.has(lang.toLowerCase()));
 
   async function handleCopy() {
     try {
@@ -41,22 +46,34 @@ function CodeBlock({
     <div className="code-block">
       <div className="code-block-header">
         <span>{lang}</span>
-        <button
-          type="button"
-          className="code-copy-btn"
-          onClick={() => void handleCopy()}
-          aria-label="复制代码"
-        >
-          {copied ? (
-            <>
-              <Check size={13} /> 已复制
-            </>
-          ) : (
-            <>
-              <Copy size={13} /> 复制代码
-            </>
+        <div className="code-block-actions">
+          {canPreview && (
+            <button
+              type="button"
+              className="code-copy-btn code-preview-btn"
+              onClick={() => onPreview?.(lang.toLowerCase(), rawCode)}
+              aria-label="预览渲染效果"
+            >
+              <Eye size={13} /> 预览
+            </button>
           )}
-        </button>
+          <button
+            type="button"
+            className="code-copy-btn"
+            onClick={() => void handleCopy()}
+            aria-label="复制代码"
+          >
+            {copied ? (
+              <>
+                <Check size={13} /> 已复制
+              </>
+            ) : (
+              <>
+                <Copy size={13} /> 复制代码
+              </>
+            )}
+          </button>
+        </div>
       </div>
       <pre>
         <code className={className}>{children}</code>
@@ -65,7 +82,13 @@ function CodeBlock({
   );
 }
 
-export function MarkdownRenderer({ content }: { content: string }) {
+export function MarkdownRenderer({
+  content,
+  onPreview
+}: {
+  content: string;
+  onPreview?: (lang: string, code: string) => void;
+}) {
   return (
     <div className="markdown-body">
       <ReactMarkdown
@@ -83,7 +106,11 @@ export function MarkdownRenderer({ content }: { content: string }) {
                 </code>
               );
             }
-            return <CodeBlock className={className}>{children}</CodeBlock>;
+            return (
+              <CodeBlock className={className} onPreview={onPreview}>
+                {children}
+              </CodeBlock>
+            );
           },
           a: ({ href, children }) => (
             <a href={href} target="_blank" rel="noopener noreferrer">
